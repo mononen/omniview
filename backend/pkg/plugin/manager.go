@@ -16,18 +16,16 @@ import (
 	pluginmetric "github.com/omniviewdev/omniview/backend/pkg/plugin/metric"
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/networker"
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/pluginlog"
-	"github.com/omniviewdev/omniview/internal/appstate"
-	regclient "github.com/omniviewdev/registry"
-
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/registry"
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/resource"
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/settings"
 	plugintypes "github.com/omniviewdev/omniview/backend/pkg/plugin/types"
-
+	"github.com/omniviewdev/omniview/internal/appstate"
+	logging "github.com/omniviewdev/plugin-sdk/log"
 	"github.com/omniviewdev/plugin-sdk/pkg/config"
 	sdktypes "github.com/omniviewdev/plugin-sdk/pkg/types"
 	pkgsettings "github.com/omniviewdev/plugin-sdk/settings"
-	logging "github.com/omniviewdev/plugin-sdk/log"
+	regclient "github.com/omniviewdev/registry"
 )
 
 const (
@@ -165,7 +163,7 @@ type pluginManager struct {
 	// pluginOpsMu serializes load/reload/unload operations per plugin to
 	// prevent concurrent lifecycle transitions for the same plugin (e.g.
 	// two file-change events triggering simultaneous reloads).
-	pluginOpsMu   sync.Mutex
+	pluginOpsMu    sync.Mutex
 	pluginOpsLocks map[string]*sync.Mutex
 }
 

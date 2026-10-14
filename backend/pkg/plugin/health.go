@@ -6,9 +6,8 @@ import (
 	"sync"
 	"time"
 
-	logging "github.com/omniviewdev/plugin-sdk/log"
-
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/lifecycle"
+	logging "github.com/omniviewdev/plugin-sdk/log"
 )
 
 const (
@@ -27,7 +26,7 @@ const (
 // crashBudget tracks the total number of crash-recovery cycles for a plugin
 // within a sliding time window to prevent infinite recovery loops.
 type crashBudget struct {
-	count      int
+	count       int
 	windowStart time.Time
 }
 

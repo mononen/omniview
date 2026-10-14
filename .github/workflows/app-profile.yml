@@ -16,7 +16,7 @@ env:
 jobs:
   app-profile:
     name: Whole-app profile
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_LINUX_RUNNER != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.SELF_HOSTED_LINUX_RUNNER) || 'ubuntu-latest' }}
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -49,7 +49,7 @@ jobs:
         run: task packages
 
       - name: Install Playwright Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm exec playwright install ${{ runner.environment == 'github-hosted' && '--with-deps' || '' }} chromium
 
       # Builds the kubernetes plugin UI and the profiling bundle, then runs the
       # scenarios. Writes the summary to the job summary.

@@ -1,8 +1,8 @@
 name: Nightly Build
 
 on:
-  schedule:
-    - cron: "0 6 * * *" # 6 AM UTC daily
+  push:
+    branches: [release]
   workflow_dispatch:
 
 permissions:
@@ -17,10 +17,11 @@ env:
   GO_VERSION: "1.26"
   NODE_VERSION: "24"
   PNPM_VERSION: "10"
+  HOMEBREW_TAP: mononendev/homebrew-tap
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
-  # Skip if no commits in the last 24 hours (unless manual dispatch)
+  # Version for this build. The job keeps its upstream name; every push to `release` builds.
   # ─────────────────────────────────────────────────────────────────────────────
   check-changes:
     runs-on: ubuntu-latest
@@ -28,36 +29,17 @@ jobs:
       should_build: ${{ steps.check.outputs.should_build }}
       nightly_version: ${{ steps.check.outputs.nightly_version }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Check for recent commits
+      - name: Compute version
         id: check
         shell: bash
         run: |
-          NIGHTLY_VERSION="0.0.0-nightly.$(date -u +%Y%m%d)"
+          # The run number keeps versions unique and increasing when several builds land on one day.
+          NIGHTLY_VERSION="0.0.0-nightly.$(date -u +%Y%m%d).${{ github.run_number }}"
           echo "nightly_version=${NIGHTLY_VERSION}" >> "$GITHUB_OUTPUT"
-
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          LAST_COMMIT=$(git log -1 --format=%ct)
-          NOW=$(date +%s)
-          DIFF=$((NOW - LAST_COMMIT))
-
-          if [ "$DIFF" -lt 86400 ]; then
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_build=false" >> "$GITHUB_OUTPUT"
-            echo "No commits in the last 24 hours — skipping nightly build"
-          fi
+          echo "should_build=true" >> "$GITHUB_OUTPUT"
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # macOS (darwin/universal) — sign, notarize, DMG
+  # macOS (darwin/arm64, file name kept as "universal") — ad-hoc sign, DMG
   # ─────────────────────────────────────────────────────────────────────────────
   build-macos:
     runs-on: macos-latest
@@ -97,7 +79,7 @@ jobs:
 
       - name: Install Wails v3
         shell: bash
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)
 
       - name: Build frontend
         shell: bash
@@ -117,6 +99,7 @@ jobs:
               -X github.com/omniviewdev/omniview/internal/version.GitCommit=${{ github.sha }} \
               -X github.com/omniviewdev/omniview/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
               -X github.com/omniviewdev/omniview/internal/version.Development=true \
+              -X github.com/omniviewdev/registry.OmniviewPublicKeyHex=${{ vars.REGISTRY_PUBLIC_KEY_HEX }} \
               -X github.com/omniviewdev/omniview/internal/telemetry.buildOTLPEndpoint=${{ secrets.TELEMETRY_OTLP_ENDPOINT }} \
               -X github.com/omniviewdev/omniview/internal/telemetry.buildPyroscopeEndpoint=${{ secrets.TELEMETRY_PYROSCOPE_ENDPOINT }} \
               -X github.com/omniviewdev/omniview/internal/appstate.buildStateDir=~/.omniview-nightly" \
@@ -131,35 +114,10 @@ jobs:
           cp bin/Omniview bin/Omniview.app/Contents/MacOS/
           cp build/darwin/Info.plist bin/Omniview.app/Contents/
 
-      - name: Import Code-Signing Certificates
-        uses: Apple-Actions/import-codesign-certs@v3
-        with:
-          p12-file-base64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
-          p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
-
-      - name: Sign and Notarize
+      # No Developer ID in this fork: ad-hoc sign. The Homebrew cask strips the quarantine attribute.
+      - name: Ad-hoc sign
         shell: bash
-        env:
-          APPLE_SIGN_ID: ${{ secrets.APPLE_DEVELOPER_SIGN_ID }}
-          NOTARY_USER: ${{ secrets.CLI_MACOS_NOTARY_USER }}
-          NOTARY_PWD: ${{ secrets.CLI_MACOS_NOTARY_PWD }}
-          TEAM_ID: ${{ secrets.CLI_MACOS_TEAM_ID }}
-        run: |
-          codesign --deep --force \
-            --options runtime \
-            --entitlements build/darwin/entitlements.plist \
-            --sign "$APPLE_SIGN_ID" \
-            bin/Omniview.app
-
-          ditto -c -k --keepParent --rsrc bin/Omniview.app archive.zip
-
-          xcrun notarytool submit archive.zip \
-            --apple-id "$NOTARY_USER" \
-            --password "$NOTARY_PWD" \
-            --team-id "$TEAM_ID" \
-            --wait
-
-          xcrun stapler staple bin/Omniview.app
+        run: codesign --deep --force --sign - bin/Omniview.app
 
       - name: Checkout create-dmg
         uses: actions/checkout@v4
@@ -207,11 +165,11 @@ jobs:
         with:
           submodules: recursive
 
+      # awalsh128/cache-apt-pkgs-action@latest restores an empty package set here, so install directly.
       - name: Install Linux dependencies
-        uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: libgtk-3-dev libwebkit2gtk-4.1-dev libwayland-dev build-essential pkg-config
-          version: 1.0
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev libwayland-dev build-essential pkg-config
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -240,7 +198,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Wails v3
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)
 
       - name: Build frontend
         run: task common:build:frontend
@@ -253,6 +211,7 @@ jobs:
               -X github.com/omniviewdev/omniview/internal/version.GitCommit=${{ github.sha }} \
               -X github.com/omniviewdev/omniview/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
               -X github.com/omniviewdev/omniview/internal/version.Development=true \
+              -X github.com/omniviewdev/registry.OmniviewPublicKeyHex=${{ vars.REGISTRY_PUBLIC_KEY_HEX }} \
               -X github.com/omniviewdev/omniview/internal/telemetry.buildOTLPEndpoint=${{ secrets.TELEMETRY_OTLP_ENDPOINT }} \
               -X github.com/omniviewdev/omniview/internal/telemetry.buildPyroscopeEndpoint=${{ secrets.TELEMETRY_PYROSCOPE_ENDPOINT }} \
               -X github.com/omniviewdev/omniview/internal/appstate.buildStateDir=~/.omniview-nightly" \
@@ -311,7 +270,7 @@ jobs:
 
       - name: Install Wails v3
         shell: bash
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)
 
       - name: Build frontend
         shell: bash
@@ -326,6 +285,7 @@ jobs:
               -X github.com/omniviewdev/omniview/internal/version.GitCommit=${{ github.sha }} \
               -X github.com/omniviewdev/omniview/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
               -X github.com/omniviewdev/omniview/internal/version.Development=true \
+              -X github.com/omniviewdev/registry.OmniviewPublicKeyHex=${{ vars.REGISTRY_PUBLIC_KEY_HEX }} \
               -X github.com/omniviewdev/omniview/internal/telemetry.buildOTLPEndpoint=${{ secrets.TELEMETRY_OTLP_ENDPOINT }} \
               -X github.com/omniviewdev/omniview/internal/telemetry.buildPyroscopeEndpoint=${{ secrets.TELEMETRY_PYROSCOPE_ENDPOINT }} \
               -X github.com/omniviewdev/omniview/internal/appstate.buildStateDir=~/.omniview-nightly" \
@@ -342,19 +302,6 @@ jobs:
           path: bin/Omniview_${{ needs.check-changes.outputs.nightly_version }}_windows_amd64.exe
           if-no-files-found: error
           retention-days: 1
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # NPM — publish @omniviewdev/* nightly packages
-  # ─────────────────────────────────────────────────────────────────────────────
-  publish-npm:
-    needs: check-changes
-    if: needs.check-changes.outputs.should_build == 'true'
-    uses: ./.github/workflows/npm-publish.yml
-    with:
-      version: ${{ needs.check-changes.outputs.nightly_version }}
-      dist-tag: nightly
-    secrets:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Publish nightly — rolling tag
@@ -397,14 +344,14 @@ jobs:
           tag_name: nightly
           name: "Nightly Build (${{ needs.check-changes.outputs.nightly_version }})"
           body: |
-            Automated nightly build from `main` branch.
+            Automated build of the `release` branch.
 
             **Version**: `${{ needs.check-changes.outputs.nightly_version }}`
             **Commit**: ${{ github.sha }}
 
             > These builds are for testing purposes and may be unstable.
             >
-            > Install via Homebrew: `brew install --cask omniviewdev/tap/omniview-nightly`
+            > Install via Homebrew: `brew install --cask mononendev/tap/omniview@nightly`
           files: release/*
           prerelease: true
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -412,10 +359,10 @@ jobs:
       - name: Update Homebrew Nightly Cask
         shell: bash
         env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
-          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
-            echo "::warning::HOMEBREW_TAP_TOKEN not set, skipping Homebrew nightly update"
+          if [ -z "$HOMEBREW_TAP_DEPLOY_KEY" ]; then
+            echo "::warning::HOMEBREW_TAP_DEPLOY_KEY not set, skipping Homebrew nightly update"
             exit 0
           fi
 
@@ -423,15 +370,20 @@ jobs:
           DMG_FILE="release/Omniview_${VERSION}_darwin_universal.dmg"
           SHA256=$(sha256sum "$DMG_FILE" | awk '{print $1}')
 
-          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/omniviewdev/homebrew-tap.git" tap
+          install -m 600 /dev/null "$RUNNER_TEMP/tap_key"
+          printf '%s\n' "$HOMEBREW_TAP_DEPLOY_KEY" > "$RUNNER_TEMP/tap_key"
+          export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/tap_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+          git clone "git@github.com:${HOMEBREW_TAP}.git" tap
           cd tap
 
-          sed -i "s/version \".*\"/version \"${VERSION}\"/" Casks/omniview-nightly.rb
-          sed -i "s/sha256 \".*\"/sha256 \"${SHA256}\"/" Casks/omniview-nightly.rb
+          CASK="Casks/omniview@nightly.rb"
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" "$CASK"
+          sed -i "s/sha256 \".*\"/sha256 \"${SHA256}\"/" "$CASK"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/omniview-nightly.rb
+          git add "$CASK"
           git diff --cached --quiet && echo "No changes to commit" && exit 0
-          git commit -m "Update omniview-nightly to ${VERSION}"
+          git commit -m "Update omniview@nightly to ${VERSION}"
           git push

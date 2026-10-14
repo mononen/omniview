@@ -49,7 +49,7 @@ jobs:
         run: task packages
 
       - name: Install Playwright Chromium
-        run: pnpm exec playwright install ${{ runner.environment == 'github-hosted' && '--with-deps' || '' }} chromium
+        run: pnpm exec playwright install --with-deps chromium
 
       - name: Run render benchmarks
         run: pnpm bench:render

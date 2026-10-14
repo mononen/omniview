@@ -72,7 +72,7 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: e2e
-        run: pnpm exec playwright install ${{ runner.environment == 'github-hosted' && '--with-deps' || '' }} chromium
+        run: pnpm exec playwright install --with-deps chromium
 
       - name: Build and start server mode
         run: |

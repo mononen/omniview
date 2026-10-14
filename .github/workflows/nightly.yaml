@@ -156,7 +156,7 @@ jobs:
   # Linux (linux/amd64)
   # ─────────────────────────────────────────────────────────────────────────────
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_LINUX_RUNNER != '' && fromJSON(vars.SELF_HOSTED_LINUX_RUNNER) || 'ubuntu-latest' }}
     needs: check-changes
     if: needs.check-changes.outputs.should_build == 'true'
     steps:
@@ -168,8 +168,13 @@ jobs:
       # awalsh128/cache-apt-pkgs-action@latest restores an empty package set here, so install directly.
       - name: Install Linux dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev libwayland-dev build-essential pkg-config
+          # Self-hosted runners may already have these; skip apt (and sudo) when they do.
+          if command -v gcc >/dev/null && pkg-config --exists gtk4 webkitgtk-6.0 wayland-client 2>/dev/null; then
+            echo "GTK4, webkitgtk-6.0 and wayland already installed"
+          else
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev libwayland-dev build-essential pkg-config
+          fi
 
       - name: Setup Node
         uses: actions/setup-node@v4

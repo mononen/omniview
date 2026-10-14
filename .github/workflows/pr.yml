@@ -19,7 +19,7 @@ jobs:
   # E2E Tests — Playwright against server mode (-tags server, no native window)
   # ─────────────────────────────────────────────────────────────────────────────
   e2e-tests:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_LINUX_RUNNER != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.SELF_HOSTED_LINUX_RUNNER) || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -30,8 +30,13 @@ jobs:
       # awalsh128/cache-apt-pkgs-action@latest restores an empty package set here, so install directly.
       - name: Install Linux dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev libwayland-dev build-essential pkg-config
+          # Self-hosted runners may already have these; skip apt (and sudo) when they do.
+          if command -v gcc >/dev/null && pkg-config --exists gtk4 webkitgtk-6.0 wayland-client 2>/dev/null; then
+            echo "GTK4, webkitgtk-6.0 and wayland already installed"
+          else
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev libwayland-dev build-essential pkg-config
+          fi
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -67,7 +72,7 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: e2e
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm exec playwright install ${{ runner.environment == 'github-hosted' && '--with-deps' || '' }} chromium
 
       - name: Build and start server mode
         run: |
@@ -122,7 +127,7 @@ jobs:
             artifact-name: pr-build-windows
             build-tags: "production"
             extra-ldflags: "-H windowsgui"
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && vars.SELF_HOSTED_LINUX_RUNNER != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.SELF_HOSTED_LINUX_RUNNER) || matrix.os }}
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -134,8 +139,13 @@ jobs:
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev libwayland-dev build-essential pkg-config
+          # Self-hosted runners may already have these; skip apt (and sudo) when they do.
+          if command -v gcc >/dev/null && pkg-config --exists gtk4 webkitgtk-6.0 wayland-client 2>/dev/null; then
+            echo "GTK4, webkitgtk-6.0 and wayland already installed"
+          else
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev libwayland-dev build-essential pkg-config
+          fi
 
       - name: Setup Node
         uses: actions/setup-node@v4

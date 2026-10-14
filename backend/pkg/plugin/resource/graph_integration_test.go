@@ -4,11 +4,10 @@ import (
 	"encoding/json"
 	"testing"
 
-	sdkresource "github.com/omniviewdev/plugin-sdk/pkg/v1/resource"
-
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/resource/graph"
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/resource/indexer"
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/resource/registry"
+	sdkresource "github.com/omniviewdev/plugin-sdk/pkg/v1/resource"
 )
 
 func TestIntegration_WatchEventToGraphQuery(t *testing.T) {
@@ -248,7 +247,7 @@ func TestIntegration_ConnectionTeardown(t *testing.T) {
 	g.SetDeclarations("k8s", "core::v1::Pod", []sdkresource.RelationshipDescriptor{
 		{
 			Type: sdkresource.RelRunsOn, TargetResourceKey: "core::v1::Node",
-			Label: "runs on",
+			Label:     "runs on",
 			Extractor: &sdkresource.RelationshipExtractor{Method: "fieldPath", FieldPath: "spec.nodeName"},
 		},
 	})
@@ -259,7 +258,9 @@ func TestIntegration_ConnectionTeardown(t *testing.T) {
 			Key: "core::v1::Pod", Connection: "c1",
 			ID: name, Namespace: "default",
 			Metadata: sdkresource.ResourceMetadata{UID: "uid-" + string(rune('0'+i))},
-			Data:     json.RawMessage(`{"metadata":{"name":"` + name + `","namespace":"default","uid":"uid-` + string(rune('0'+i)) + `"},"spec":{"nodeName":"worker-1"}}`),
+			Data: json.RawMessage(`{"metadata":{"name":"` + name +
+				`","namespace":"default","uid":"uid-` + string(rune('0'+i)) +
+				`"},"spec":{"nodeName":"worker-1"}}`),
 		})
 	}
 

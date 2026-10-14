@@ -1,4 +1,6 @@
-import '@omniviewdev/ui/theme/tokens.css';
+// Imported first so its timestamp marks the start of frontend evaluation.
+import './features/perf/startup';
+
 import './theme/base-ui.css';
 
 import 'systemjs/dist/system.js';
@@ -22,10 +24,10 @@ const bridgeSink: LogSink = {
 initTelemetry(bridgeSink);
 
 import App from './App';
-import { createRoot } from "react-dom/client";
+import { createRoot } from 'react-dom/client';
 
-const container = document.getElementById("root") as HTMLElement;
+const container = document.getElementById('root')!;
 const root = createRoot(container);
 
-root.render(<App />)
+root.render(<App />);
 

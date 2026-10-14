@@ -1,8 +1,9 @@
-import { useLayoutEffect, useState } from 'react';
-import { createHashRouter, RouterProvider, type RouteObject } from 'react-router-dom';
+import { useEffect, useLayoutEffect, useState } from 'react';
+import { createHashRouter, RouterProvider, type NonIndexRouteObject, type RouteObject } from 'react-router-dom';
 import { usePluginRoutes } from '@/features/plugins';
 import { coreRoutes } from './routes';
 import PrimaryLoading from '@/components/util/PrimaryLoading';
+import { reportStartupReady } from '@/features/perf/startup';
 
 const buildPluginRouteWrapper = (pluginRoutes: RouteObject[]) => {
   // Deep-clone the top-level route and its children array to avoid mutating
@@ -22,9 +23,11 @@ const buildPluginRouteWrapper = (pluginRoutes: RouteObject[]) => {
     children: pluginRoutes,
   });
 
+  const root: RouteObject = { ...(coreRoutes[0] as NonIndexRouteObject), children: coreChildren };
+
   // Preserve any additional top-level routes (e.g., catch-all)
   return [
-    { ...coreRoutes[0], children: coreChildren } as RouteObject,
+    root,
     ...coreRoutes.slice(1),
   ];
 };
@@ -44,6 +47,13 @@ export const RouteProvider = () => {
     setRouter(newRouter);
     console.debug('[RouteProvider] router created', { routeVersion });
   }, [routeVersion]);
+
+  // The shell counts as interactive once the first router has rendered.
+  useEffect(() => {
+    if (router) {
+      reportStartupReady();
+    }
+  }, [router]);
 
   if (!router) {
     console.debug('[RouteProvider] rendering PrimaryLoading (first render)');

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
 // material-ui
-import Box from '@mui/material/Box';
-import CircularProgress from '@mui/material/CircularProgress';
+import { Spinner } from '@omniviewdev/base-ui';
+import styles from './Terminal.module.css';
 
 // xterm
 import { Terminal } from '@xterm/xterm';
@@ -11,6 +11,7 @@ import { CanvasAddon } from '@xterm/addon-canvas';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { debounce } from '@/utils/debounce';
+import { orFallback } from '@/utils/orFallback';
 
 // project import
 import { ExecClient } from '@omniviewdev/runtime/api';
@@ -49,21 +50,10 @@ export default function TerminalContainer({ sessionId, tab }: Props) {
   // Show loading state while session is being created
   if (tabStatus === 'connecting') {
     return (
-      <Box sx={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100%',
-        width: '100%',
-        bgcolor: settingsThemeBg,
-        gap: 1.5,
-      }}>
-        <CircularProgress size={24} sx={{ color: 'grey.500' }} />
-        <Box sx={{ color: 'grey.500', fontSize: 13, fontFamily: 'monospace' }}>
-          Connecting...
-        </Box>
-      </Box>
+      <div className={styles.Status} style={{ backgroundColor: settingsThemeBg }}>
+        <Spinner size='md' />
+        <div className={styles.StatusText}>Connecting...</div>
+      </div>
     );
   }
 
@@ -71,25 +61,10 @@ export default function TerminalContainer({ sessionId, tab }: Props) {
   if (tabStatus === 'error') {
     const errorMsg = tab?.properties?.error as string | undefined;
     return (
-      <Box sx={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100%',
-        width: '100%',
-        bgcolor: settingsThemeBg,
-        gap: 1,
-      }}>
-        <Box sx={{ color: 'error.main', fontSize: 14, fontFamily: 'monospace', fontWeight: 600 }}>
-          Connection Failed
-        </Box>
-        {errorMsg && (
-          <Box sx={{ color: 'grey.500', fontSize: 12, fontFamily: 'monospace', maxWidth: 500, textAlign: 'center', px: 2 }}>
-            {errorMsg}
-          </Box>
-        )}
-      </Box>
+      <div className={styles.Status} style={{ backgroundColor: settingsThemeBg }}>
+        <div className={styles.StatusError}>Connection Failed</div>
+        {errorMsg && <div className={styles.StatusDetail}>{errorMsg}</div>}
+      </div>
     );
   }
 
@@ -146,7 +121,9 @@ export default function TerminalContainer({ sessionId, tab }: Props) {
   // Apply settings changes to a live terminal without recreating it.
   useEffect(() => {
     const term = xtermRef.current;
-    if (!term) return;
+    if (!term) {
+      return;
+    }
 
     const themeName = (settings['terminal.theme'] as string) || 'default';
     term.options.theme = getTerminalTheme(themeName);
@@ -183,8 +160,8 @@ export default function TerminalContainer({ sessionId, tab }: Props) {
       allowTransparency: true,
       macOptionIsMeta: true,
       macOptionClickForcesSelection: true,
-      fontSize: s['terminal.fontSize'] || 12,
-      fontFamily: "Consolas,Liberation Mono,Menlo,Courier,monospace",
+      fontSize: orFallback(s['terminal.fontSize'], 12),
+      fontFamily: 'Consolas,Liberation Mono,Menlo,Courier,monospace',
       fontWeight: 'normal',
       theme,
     });
@@ -218,6 +195,7 @@ export default function TerminalContainer({ sessionId, tab }: Props) {
     const handleWindowResize = () => {
       handleFit();
     };
+
     window.addEventListener('resize', handleWindowResize);
 
     // Re-fit when the bottom drawer finishes a resize transition
@@ -252,14 +230,14 @@ export default function TerminalContainer({ sessionId, tab }: Props) {
     const setupSignalHandlers = () => {
       // ERROR signal: structured error from plugin layer
       Events.On(constructSignalHandler('ERROR', sessionId), (ev) => {
-        const errorInfo = ev.data as any;
+        const errorInfo = ev.data;
         if (errorInfo && typeof errorInfo === 'object') {
           const info: TerminalErrorInfo = {
-            title: errorInfo.title || errorInfo.Title || 'Session error',
-            suggestion: errorInfo.suggestion || errorInfo.Suggestion || 'The session encountered an error.',
-            raw: errorInfo.message || errorInfo.Message || '',
+            title: orFallback(orFallback(errorInfo.title, errorInfo.Title), 'Session error'),
+            suggestion: orFallback(orFallback(errorInfo.suggestion, errorInfo.Suggestion), 'The session encountered an error.'),
+            raw: orFallback(orFallback(errorInfo.message, errorInfo.Message), ''),
             retryable: errorInfo.retryable ?? errorInfo.Retryable ?? false,
-            retryCommands: errorInfo.retry_commands || errorInfo.RetryCommands || errorInfo.retry_Commands,
+            retryCommands: orFallback(orFallback(errorInfo.retry_commands, errorInfo.RetryCommands), errorInfo.retry_Commands),
           };
           errorRef.current = info;
           setError(info);
@@ -272,20 +250,37 @@ export default function TerminalContainer({ sessionId, tab }: Props) {
         if (errorRef.current) {
           return;
         }
+
         // Only auto-close the tab if the session was successfully attached
         if (attachedRef.current) {
           bottomDrawerChannel.emit('onSessionClosed', { id: sessionId });
         }
       });
 
-      Events.On(constructSignalHandler('SIGINT', sessionId), () => { console.log('SIGINT'); });
-      Events.On(constructSignalHandler('SIGQUIT', sessionId), () => { console.log('SIGQUIT'); });
-      Events.On(constructSignalHandler('SIGTERM', sessionId), () => { console.log('SIGTERM'); });
-      Events.On(constructSignalHandler('SIGKILL', sessionId), () => { console.log('SIGKILL'); });
-      Events.On(constructSignalHandler('SIGHUP', sessionId), () => { console.log('SIGHUP'); });
-      Events.On(constructSignalHandler('SIGUSR1', sessionId), () => { console.log('SIGUSR1'); });
-      Events.On(constructSignalHandler('SIGUSR2', sessionId), () => { console.log('SIGUSR2'); });
-      Events.On(constructSignalHandler('SIGWINCH', sessionId), () => { console.log('SIGWINCH'); });
+      Events.On(constructSignalHandler('SIGINT', sessionId), () => {
+        console.log('SIGINT'); 
+      });
+      Events.On(constructSignalHandler('SIGQUIT', sessionId), () => {
+        console.log('SIGQUIT'); 
+      });
+      Events.On(constructSignalHandler('SIGTERM', sessionId), () => {
+        console.log('SIGTERM'); 
+      });
+      Events.On(constructSignalHandler('SIGKILL', sessionId), () => {
+        console.log('SIGKILL'); 
+      });
+      Events.On(constructSignalHandler('SIGHUP', sessionId), () => {
+        console.log('SIGHUP'); 
+      });
+      Events.On(constructSignalHandler('SIGUSR1', sessionId), () => {
+        console.log('SIGUSR1'); 
+      });
+      Events.On(constructSignalHandler('SIGUSR2', sessionId), () => {
+        console.log('SIGUSR2'); 
+      });
+      Events.On(constructSignalHandler('SIGWINCH', sessionId), () => {
+        console.log('SIGWINCH'); 
+      });
     };
 
     setupSignalHandlers();
@@ -321,7 +316,7 @@ export default function TerminalContainer({ sessionId, tab }: Props) {
 
     attachToSession().then(() => {
       attachedRef.current = true;
-      fitAddon.fit()
+      fitAddon.fit();
       terminal.onData(data => {
         ExecClient.WriteSession(sessionId, Base64.encode(data))
           .catch((err: unknown) => {
@@ -351,6 +346,7 @@ export default function TerminalContainer({ sessionId, tab }: Props) {
       } catch (e) {
         console.log(e);
       }
+
       canvasAddonRef.current = undefined;
       webglAddonRef.current = undefined;
 
@@ -363,6 +359,7 @@ export default function TerminalContainer({ sessionId, tab }: Props) {
         Events.Off(constructSignalHandler(signal, sessionId));
       });
       ExecClient.DetachSession(sessionId).then(() => {
+        // Nothing to do once detached.
       }).catch((err: unknown) => {
         log.error(new Error(parseAppError(err).detail), { event: 'detach_session', sessionId });
       });

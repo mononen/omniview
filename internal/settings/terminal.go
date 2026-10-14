@@ -4,9 +4,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 
 	"github.com/omniviewdev/plugin-sdk/settings"
 )
+
+// defaultTerminalFontSize is the default terminal font size in pixels.
+const defaultTerminalFontSize = 12
 
 //nolint:gochecknoglobals // we're providing this as a package level variable
 var Terminal = settings.Category{
@@ -19,7 +23,7 @@ var Terminal = settings.Category{
 			ID:          "defaultShell",
 			Type:        settings.Text,
 			Label:       "Default Shell",
-			Default:     "/bin/zsh",
+			Default:     defaultShell(),
 			Description: "The default shell to use when opening a terminal",
 			Validator: func(value interface{}) error {
 				val, ok := value.(string)
@@ -31,7 +35,7 @@ var Terminal = settings.Category{
 					return fmt.Errorf("could not find executable: %w", err)
 				}
 				// make sure the shell exists on the users system
-				if _, err := os.Stat(path); os.IsNotExist(err) {
+				if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
 					return fmt.Errorf("could not find shell '%s'", val)
 				}
 
@@ -39,40 +43,40 @@ var Terminal = settings.Category{
 			},
 		},
 
-		"theme": {
-			ID:          "theme",
+		settingTheme: {
+			ID:          settingTheme,
 			Type:        settings.Text,
 			Label:       "Theme",
-			Default:     "default",
+			Default:     themeDefault,
 			Description: "The color theme for the terminal",
 			Options: []settings.SettingOption{
-				{Value: "default", Label: "Default"},
-				{Value: "dracula", Label: "Dracula"},
-				{Value: "solarized-dark", Label: "Solarized Dark"},
-				{Value: "solarized-light", Label: "Solarized Light"},
-				{Value: "one-dark-pro", Label: "One Dark Pro"},
-				{Value: "monokai", Label: "Monokai"},
-				{Value: "nord", Label: "Nord"},
-				{Value: "gruvbox-dark", Label: "Gruvbox Dark"},
-				{Value: "tokyo-night", Label: "Tokyo Night"},
-				{Value: "catppuccin-mocha", Label: "Catppuccin Mocha"},
-				{Value: "github-dark", Label: "GitHub Dark"},
-				{Value: "github-light", Label: "GitHub Light"},
-				{Value: "material-dark", Label: "Material Dark"},
-				{Value: "cobalt2", Label: "Cobalt2"},
-				{Value: "ayu-dark", Label: "Ayu Dark"},
-				{Value: "synthwave-84", Label: "Synthwave '84"},
-				{Value: "rose-pine", Label: "Rose Pine"},
-				{Value: "kanagawa", Label: "Kanagawa"},
-				{Value: "everforest-dark", Label: "Everforest Dark"},
-				{Value: "one-light", Label: "One Light"},
+				{Value: themeDefault, Label: "Default", Description: ""},
+				{Value: "dracula", Label: "Dracula", Description: ""},
+				{Value: "solarized-dark", Label: "Solarized Dark", Description: ""},
+				{Value: "solarized-light", Label: "Solarized Light", Description: ""},
+				{Value: "one-dark-pro", Label: "One Dark Pro", Description: ""},
+				{Value: "monokai", Label: "Monokai", Description: ""},
+				{Value: "nord", Label: "Nord", Description: ""},
+				{Value: "gruvbox-dark", Label: "Gruvbox Dark", Description: ""},
+				{Value: "tokyo-night", Label: "Tokyo Night", Description: ""},
+				{Value: "catppuccin-mocha", Label: "Catppuccin Mocha", Description: ""},
+				{Value: "github-dark", Label: "GitHub Dark", Description: ""},
+				{Value: "github-light", Label: "GitHub Light", Description: ""},
+				{Value: "material-dark", Label: "Material Dark", Description: ""},
+				{Value: "cobalt2", Label: "Cobalt2", Description: ""},
+				{Value: "ayu-dark", Label: "Ayu Dark", Description: ""},
+				{Value: "synthwave-84", Label: "Synthwave '84", Description: ""},
+				{Value: "rose-pine", Label: "Rose Pine", Description: ""},
+				{Value: "kanagawa", Label: "Kanagawa", Description: ""},
+				{Value: "everforest-dark", Label: "Everforest Dark", Description: ""},
+				{Value: "one-light", Label: "One Light", Description: ""},
 			},
 		},
-		"fontSize": {
-			ID:          "fontSize",
+		settingFontSize: {
+			ID:          settingFontSize,
 			Type:        settings.Integer,
 			Label:       "Font Size",
-			Default:     12, //nolint:gomnd // this is a reasonable default
+			Default:     defaultTerminalFontSize,
 			Description: "The size of the font in the terminal",
 		},
 		"cursorStyle": {
@@ -82,9 +86,9 @@ var Terminal = settings.Category{
 			Default:     "block",
 			Description: "The style of the cursor in the terminal",
 			Options: []settings.SettingOption{
-				{Value: "block", Label: "Block"},
-				{Value: "underline", Label: "Underline"},
-				{Value: "bar", Label: "Bar"},
+				{Value: "block", Label: "Block", Description: ""},
+				{Value: "underline", Label: "Underline", Description: ""},
+				{Value: "bar", Label: "Bar", Description: ""},
 			},
 		},
 		"cursorBlink": {
@@ -95,4 +99,23 @@ var Terminal = settings.Category{
 			Description: "Whether the cursor should blink in the terminal",
 		},
 	},
+}
+
+// defaultShell picks a shell that exists on this machine: the user's $SHELL,
+// else the first common one found. A fixed /bin/zsh fails validation on
+// systems without zsh, which rejects every save that includes the default.
+func defaultShell() string {
+	if runtime.GOOS == "windows" {
+		return "powershell.exe"
+	}
+	candidates := []string{os.Getenv("SHELL"), "/bin/zsh", "/bin/bash", "/bin/sh"}
+	for _, shell := range candidates {
+		if shell == "" {
+			continue
+		}
+		if _, err := exec.LookPath(shell); err == nil {
+			return shell
+		}
+	}
+	return "/bin/sh"
 }

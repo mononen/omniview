@@ -6,65 +6,47 @@ import ConnectionStateDialog from '../ConnectionStateDialog';
 // Values must be defined inside the factory because vi.mock is hoisted.
 vi.mock('@omniviewdev/runtime', () => ({
   WatchState: {
-    IDLE: 0,
-    SYNCING: 1,
-    SYNCED: 2,
-    ERROR: 3,
-    FAILED: 4,
-    FORBIDDEN: 5,
-    STOPPED: 6,
-    SKIPPED: 7,
+    WatchStateIdle: 0,
+    WatchStateSyncing: 1,
+    WatchStateSynced: 2,
+    WatchStateError: 3,
+    WatchStateStopped: 4,
+    WatchStateFailed: 5,
+    WatchStateForbidden: 6,
+    WatchStateSkipped: 7,
   },
   parseResourceKey: (key: string) => {
     const parts = key.split('::');
-    if (parts.length === 1) return { group: 'core', version: '', kind: parts[0] };
+    if (parts.length === 1) {
+      return { group: 'core', version: '', kind: parts[0] };
+    }
+
     return { group: parts[0] || 'core', version: parts[1] || '', kind: parts[2] || parts[0] };
   },
   formatGroup: (group: string) => {
-    if (!group || group === 'core') return 'Core';
+    if (!group || group === 'core') {
+      return 'Core';
+    }
+
     return group.charAt(0).toUpperCase() + group.slice(1);
   },
 }));
 
-// Minimal MUI stubs — Dialog renders children when open
-vi.mock('@mui/material/Dialog', () => ({
-  __esModule: true,
-  default: ({ open, children }: any) => open ? <div data-testid="dialog">{children}</div> : null,
-}));
-vi.mock('@mui/material/DialogContent', () => ({
-  __esModule: true,
-  default: ({ children }: any) => <div data-testid="dialog-content">{children}</div>,
-}));
-vi.mock('@mui/material/DialogActions', () => ({
-  __esModule: true,
-  default: ({ children }: any) => <div data-testid="dialog-actions">{children}</div>,
-}));
-vi.mock('@mui/material/CircularProgress', () => ({
-  __esModule: true,
-  default: () => <span data-testid="spinner" />,
-}));
-vi.mock('@mui/material/LinearProgress', () => ({
-  __esModule: true,
-  default: ({ value }: any) => <div data-testid="progress-bar" data-value={value} />,
-}));
-vi.mock('@mui/material/IconButton', () => ({
-  __esModule: true,
-  default: ({ children, onClick }: any) => <button data-testid="close-btn" onClick={onClick}>{children}</button>,
-}));
-vi.mock('@mui/material/Box', () => ({
-  __esModule: true,
-  default: ({ children, ...rest }: any) => <div {...rest}>{children}</div>,
-}));
-
-// Stub @omniviewdev/ui components
-vi.mock('@omniviewdev/ui/buttons', () => ({
-  Button: ({ children, onClick, ...rest }: any) => (
-    <button onClick={onClick} data-testid={`btn-${children}`} {...rest}>{children}</button>
-  ),
-}));
-vi.mock('@omniviewdev/ui/typography', () => ({
-  Text: ({ children, ...rest }: any) => <span {...rest}>{children}</span>,
-}));
+// Minimal base-ui stubs — Dialog renders children inline (no portal) when open
+vi.mock('@omniviewdev/base-ui', () => {
+  const Dialog = ({ open, children }: any) => open ? <div data-testid="dialog">{children}</div> : null;
+  Dialog.Title = ({ children }: any) => <h2>{children}</h2>;
+  return {
+    Dialog,
+    Spinner: () => <span data-testid="spinner" />,
+    Progress: ({ value }: any) => <div data-testid="progress-bar" data-value={value} />,
+    IconButton: ({ children, onClick }: any) => <button data-testid="close-btn" onClick={onClick}>{children}</button>,
+    Button: ({ children, onClick }: any) => (
+      <button onClick={onClick} data-testid={`btn-${children}`}>{children}</button>
+    ),
+    Text: ({ children }: any) => <span>{children}</span>,
+  };
+});
 
 // Stub react-icons
 vi.mock('react-icons/lu', () => ({
@@ -75,12 +57,15 @@ vi.mock('react-icons/lu', () => ({
   LuX: () => <span data-testid="icon-x" />,
 }));
 
+const resources: Record<string, number> = {};
+const resourceCounts: Record<string, number> = {};
+
 const defaultProps = {
   open: true,
   onClose: vi.fn(),
   connectionName: 'my-cluster',
-  resources: {} as Record<string, number>,
-  resourceCounts: {} as Record<string, number>,
+  resources,
+  resourceCounts,
   onRetryResource: vi.fn(),
 };
 
@@ -101,8 +86,8 @@ describe('ConnectionStateDialog', () => {
       <ConnectionStateDialog
         {...defaultProps}
         resources={{
-          'core::v1::Pod': WatchState.SYNCING,
-          'core::v1::Service': WatchState.SYNCED,
+          'core::v1::Pod': WatchState.WatchStateSyncing,
+          'core::v1::Service': WatchState.WatchStateSynced,
         }}
       />,
     );
@@ -114,8 +99,8 @@ describe('ConnectionStateDialog', () => {
       <ConnectionStateDialog
         {...defaultProps}
         resources={{
-          'core::v1::Pod': WatchState.SYNCED,
-          'core::v1::Service': WatchState.SYNCED,
+          'core::v1::Pod': WatchState.WatchStateSynced,
+          'core::v1::Service': WatchState.WatchStateSynced,
         }}
       />,
     );
@@ -127,8 +112,8 @@ describe('ConnectionStateDialog', () => {
       <ConnectionStateDialog
         {...defaultProps}
         resources={{
-          'apps::v1::Deployment': WatchState.SYNCED,
-          'core::v1::Pod': WatchState.SYNCED,
+          'apps::v1::Deployment': WatchState.WatchStateSynced,
+          'core::v1::Pod': WatchState.WatchStateSynced,
         }}
       />,
     );
@@ -147,7 +132,7 @@ describe('ConnectionStateDialog', () => {
     render(
       <ConnectionStateDialog
         {...defaultProps}
-        resources={{ 'core::v1::Pod': WatchState.ERROR }}
+        resources={{ 'core::v1::Pod': WatchState.WatchStateError }}
         onRetryResource={defaultProps.onRetryResource}
       />,
     );
@@ -160,7 +145,7 @@ describe('ConnectionStateDialog', () => {
     render(
       <ConnectionStateDialog
         {...defaultProps}
-        resources={{ 'apps::v1::Deployment': WatchState.FAILED }}
+        resources={{ 'apps::v1::Deployment': WatchState.WatchStateFailed }}
       />,
     );
     expect(screen.getByTestId('btn-Retry')).toBeTruthy();
@@ -170,7 +155,7 @@ describe('ConnectionStateDialog', () => {
     render(
       <ConnectionStateDialog
         {...defaultProps}
-        resources={{ 'core::v1::Secret': WatchState.FORBIDDEN }}
+        resources={{ 'core::v1::Secret': WatchState.WatchStateForbidden }}
       />,
     );
     expect(screen.getByText('No access')).toBeTruthy();
@@ -180,7 +165,7 @@ describe('ConnectionStateDialog', () => {
     render(
       <ConnectionStateDialog
         {...defaultProps}
-        resources={{ 'core::v1::Pod': WatchState.SYNCED }}
+        resources={{ 'core::v1::Pod': WatchState.WatchStateSynced }}
         resourceCounts={{ 'core::v1::Pod': 42 }}
       />,
     );
@@ -192,9 +177,9 @@ describe('ConnectionStateDialog', () => {
       <ConnectionStateDialog
         {...defaultProps}
         resources={{
-          'core::v1::Pod': WatchState.SYNCED,
-          'core::v1::Secret': WatchState.SKIPPED,
-          'apps::v1::Deployment': WatchState.SYNCED,
+          'core::v1::Pod': WatchState.WatchStateSynced,
+          'core::v1::Secret': WatchState.WatchStateSkipped,
+          'apps::v1::Deployment': WatchState.WatchStateSynced,
         }}
       />,
     );
@@ -210,10 +195,10 @@ describe('ConnectionStateDialog', () => {
       <ConnectionStateDialog
         {...defaultProps}
         resources={{
-          'core::v1::Pod': WatchState.SYNCED,
-          'core::v1::Service': WatchState.SYNCING,
-          'apps::v1::Deployment': WatchState.SYNCED,
-          'apps::v1::StatefulSet': WatchState.SYNCING,
+          'core::v1::Pod': WatchState.WatchStateSynced,
+          'core::v1::Service': WatchState.WatchStateSyncing,
+          'apps::v1::Deployment': WatchState.WatchStateSynced,
+          'apps::v1::StatefulSet': WatchState.WatchStateSyncing,
         }}
       />,
     );

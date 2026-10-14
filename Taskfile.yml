@@ -32,20 +32,20 @@ tasks:
     cmds:
       - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
 
-  # Server mode (headless HTTP server) is not yet supported on macOS in
-  # Wails v3 alpha.74 due to build tag conflicts. For E2E testing,
-  # Playwright connects to the Vite dev server (port 9245) started by `task dev`.
-  # TODO: Enable server mode when Wails v3 adds !server to darwin files.
-  # build:server:
-  #   deps:
-  #     - task: common:build:frontend
-  #   cmds:
-  #     - go build -tags server -o {{.BIN_DIR}}/{{.APP_NAME}}-server
-  # run:server:
-  #   deps:
-  #     - task: build:server
-  #   cmds:
-  #     - ./{{.BIN_DIR}}/{{.APP_NAME}}-server
+  # Server mode: the app as a plain HTTP server on localhost:34115 with no native
+  # window, for Playwright (e2e/). State goes to bin/server-state unless
+  # OMNIVIEW_STATE_DIR is set, so it never touches ~/.omniview.
+  build:server:
+    deps:
+      - task: common:build:frontend
+    cmds:
+      - GOWORK=off go build -tags server -o {{.BIN_DIR}}/{{.APP_NAME}}-server .
+
+  run:server:
+    deps:
+      - task: build:server
+    cmds:
+      - OMNIVIEW_STATE_DIR="${OMNIVIEW_STATE_DIR:-$PWD/{{.BIN_DIR}}/server-state}" ./{{.BIN_DIR}}/{{.APP_NAME}}-server
 
   # ──────────────────────────────────────────────
   # CI / Verification targets
@@ -160,6 +160,7 @@ tasks:
   check:ui-typecheck:
     cmds:
       - pnpm exec tsc -p tsconfig.app.json --noEmit
+      - pnpm exec tsc -p tsconfig.test.json --noEmit
 
   # ──────────────────────────────────────────────
   # Workspace packages
@@ -170,8 +171,21 @@ tasks:
     cmds:
       - pnpm --filter @omniviewdev/providers run build
       - pnpm --filter @omniviewdev/vite-plugin run build
-      - pnpm --filter @omniviewdev/ui run build
       - pnpm --filter @omniviewdev/runtime run build
+
+  # ──────────────────────────────────────────────
+  # Performance
+  # ──────────────────────────────────────────────
+
+  perf:coldstart:
+    summary: "Build the production bundle and measure cold start (macOS). Args after --, e.g. task perf:coldstart -- -n 10"
+    cmds:
+      - scripts/perf/coldstart.sh {{.CLI_ARGS}}
+
+  perf:app:
+    summary: "Profile the whole frontend in Chromium with a faked backend (bench/app). Args after --, e.g. task perf:app -- --runs 3 --only pods"
+    cmds:
+      - node bench/app/run.mjs {{.CLI_ARGS}}
 
   # ──────────────────────────────────────────────
   # E2E tests

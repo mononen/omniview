@@ -228,6 +228,41 @@ describe('LogViewerContainer', () => {
     expect(queryByText('Jump to bottom')).toBeNull();
   });
 
+  it('scrolling up with the wheel leaves follow mode', () => {
+    mockEntries = Array.from({ length: 100 }, (_, i) => makeEntry(i));
+    mockVersion = 1;
+    mockLineCount = 100;
+
+    const { container, queryByText } = render(<LogViewerContainer sessionId="sess-1" />);
+    const list = container.querySelector('[data-index]')!.parentElement!.parentElement!;
+
+    fireEvent.wheel(list, { deltaY: 120 });
+    expect(queryByText('Jump to bottom')).toBeNull();
+
+    fireEvent.wheel(list, { deltaY: -120 });
+    expect(queryByText('Jump to bottom')).toBeTruthy();
+  });
+
+  it('keeps the newest line in view as lines arrive while following', () => {
+    mockEntries = Array.from({ length: 100 }, (_, i) => makeEntry(i));
+    mockVersion = 1;
+    mockLineCount = 100;
+
+    const { container, rerender } = render(<LogViewerContainer sessionId="sess-1" />);
+    const list = container.querySelector('[data-index]')!.parentElement!.parentElement! as HTMLDivElement;
+    let scrollHeight = 1800;
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, get: () => scrollHeight });
+    Object.defineProperty(list, 'clientHeight', { configurable: true, get: () => 300 });
+
+    mockEntries = Array.from({ length: 200 }, (_, i) => makeEntry(i));
+    mockVersion = 2;
+    mockLineCount = 200;
+    scrollHeight = 3600;
+    rerender(<LogViewerContainer sessionId="sess-2" />);
+
+    expect(list.scrollTop).toBe(3300);
+  });
+
   it('copy all copies every filtered entry to clipboard', async () => {
     mockEntries = [makeEntry(0), makeEntry(1), makeEntry(2)];
     mockVersion = 1;
@@ -476,7 +511,7 @@ describe('LogViewerContainer', () => {
 
     // The log scroll area contains the entries; find it via the entry
     const entry = getByTestId('log-entry-0');
-    const scrollArea = entry.closest('[tabindex="0"]') as HTMLElement;
+    const scrollArea = entry.closest('[tabindex="0"]')!;
     expect(scrollArea).toBeTruthy();
 
     // Fire Cmd+A on the scroll area
@@ -514,7 +549,7 @@ describe('LogViewerContainer', () => {
     const { getByTestId } = render(<LogViewerContainer sessionId="sess-1" />);
 
     const entry = getByTestId('log-entry-0');
-    const scrollArea = entry.closest('[tabindex="0"]') as HTMLElement;
+    const scrollArea = entry.closest('[tabindex="0"]')!;
     expect(scrollArea).toBeTruthy();
 
     // Fire Ctrl+A (Windows/Linux) on the scroll area
@@ -536,7 +571,7 @@ describe('LogViewerContainer', () => {
 
     const toolbar = getByTestId('log-toolbar');
     const entry = getByTestId('log-entry-0');
-    const scrollArea = entry.closest('[tabindex="0"]') as HTMLElement;
+    const scrollArea = entry.closest('[tabindex="0"]')!;
     expect(scrollArea).toBeTruthy();
 
     // Toolbar should have normal pointer-events
@@ -561,7 +596,7 @@ describe('LogViewerContainer', () => {
 
     const toolbar = getByTestId('log-toolbar');
     const entry = getByTestId('log-entry-0');
-    const scrollArea = entry.closest('[tabindex="0"]') as HTMLElement;
+    const scrollArea = entry.closest('[tabindex="0"]')!;
 
     fireEvent.mouseDown(scrollArea, { button: 0 });
     expect(toolbar.style.pointerEvents).toBe('none');

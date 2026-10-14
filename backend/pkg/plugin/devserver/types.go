@@ -18,15 +18,15 @@ func init() {
 
 const (
 	// EventDevServerStatus is emitted whenever any field in DevServerState changes.
-	// Payload: DevServerState
+	// Payload: DevServerState.
 	EventDevServerStatus = "plugin/devserver/status"
 
 	// EventDevServerLog is emitted for batched log lines from Vite or Go build.
-	// Payload: []LogEntry (each entry contains pluginID)
+	// Payload: []LogEntry (each entry contains pluginID).
 	EventDevServerLog = "plugin/devserver/log"
 
 	// EventDevServerError is emitted for structured build errors.
-	// Payload: (pluginID string, errors []BuildError)
+	// Payload: (pluginID string, errors []BuildError).
 	EventDevServerError = "plugin/devserver/error"
 )
 
@@ -84,11 +84,32 @@ type DevServerState struct {
 
 // LogEntry is a single log line from either the Vite process or the Go build.
 type LogEntry struct {
-	Timestamp string    `json:"timestamp"`
-	Source    string    `json:"source"` // "vite" | "go-build" | "go-watch" | "manager"
-	Level     string    `json:"level"`  // "info" | "warn" | "error" | "debug"
-	Message   string    `json:"message"`
-	PluginID  string    `json:"pluginID"`
+	Timestamp string `json:"timestamp"`
+	Source    string `json:"source"` // "vite" | "go-build" | "go-watch" | "manager"
+	Level     string `json:"level"`  // "info" | "warn" | "error" | "debug"
+	Message   string `json:"message"`
+	PluginID  string `json:"pluginID"`
+}
+
+// LogEntry sources and levels.
+const (
+	logSourceVite    = "vite"
+	logSourceGoBuild = "go-build"
+	logSourceGoWatch = "go-watch"
+	logLevelInfo     = "info"
+	logLevelError    = "error"
+)
+
+// newLogEntry builds a LogEntry. Timestamp and PluginID are left empty; the
+// instance fills them in when the entry is appended.
+func newLogEntry(source, level, message string) LogEntry {
+	return LogEntry{
+		Timestamp: "",
+		Source:    source,
+		Level:     level,
+		Message:   message,
+		PluginID:  "",
+	}
 }
 
 // DevServerErrorPayload wraps a plugin ID and its build errors into a single
@@ -144,6 +165,8 @@ type LogRingBuffer struct {
 func NewLogRingBuffer(capacity int) *LogRingBuffer {
 	return &LogRingBuffer{
 		entries: make([]LogEntry, capacity),
+		head:    0,
+		count:   0,
 		cap:     capacity,
 	}
 }

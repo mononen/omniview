@@ -18,11 +18,17 @@ vi.mock('@omniviewdev/runtime', () => ({
   WatchState: { IDLE: 0, SYNCING: 1, SYNCED: 2, ERROR: 3, FAILED: 4, FORBIDDEN: 5, STOPPED: 6, SKIPPED: 7 },
   parseResourceKey: (key: string) => {
     const parts = key.split('::');
-    if (parts.length === 1) return { group: 'core', version: '', kind: parts[0] };
+    if (parts.length === 1) {
+      return { group: 'core', version: '', kind: parts[0] };
+    }
+
     return { group: parts[0] || 'core', version: parts[1] || '', kind: parts[2] || parts[0] };
   },
   formatGroup: (group: string) => {
-    if (!group || group === 'core') return 'Core';
+    if (!group || group === 'core') {
+      return 'Core';
+    }
+
     return group.charAt(0).toUpperCase() + group.slice(1);
   },
 }));
@@ -34,41 +40,19 @@ vi.mock('@omniviewdev/runtime/api', () => ({
   },
 }));
 
-// Minimal MUI stubs
-vi.mock('@mui/material/Dialog', () => ({
-  __esModule: true,
-  default: ({ open, children }: any) => open ? <div data-testid="dialog">{children}</div> : null,
-}));
-vi.mock('@mui/material/DialogContent', () => ({
-  __esModule: true,
-  default: ({ children }: any) => <div>{children}</div>,
-}));
-vi.mock('@mui/material/DialogActions', () => ({
-  __esModule: true,
-  default: ({ children }: any) => <div>{children}</div>,
-}));
-vi.mock('@mui/material/CircularProgress', () => ({
-  __esModule: true,
-  default: () => <span />,
-}));
-vi.mock('@mui/material/LinearProgress', () => ({
-  __esModule: true,
-  default: () => <div />,
-}));
-vi.mock('@mui/material/IconButton', () => ({
-  __esModule: true,
-  default: ({ children, onClick }: any) => <button onClick={onClick}>{children}</button>,
-}));
-vi.mock('@mui/material/Box', () => ({
-  __esModule: true,
-  default: ({ children }: any) => <div>{children}</div>,
-}));
-vi.mock('@omniviewdev/ui/buttons', () => ({
-  Button: ({ children, onClick }: any) => <button onClick={onClick}>{children}</button>,
-}));
-vi.mock('@omniviewdev/ui/typography', () => ({
-  Text: ({ children }: any) => <span>{children}</span>,
-}));
+// Minimal base-ui stubs — Dialog renders children inline (no portal) when open
+vi.mock('@omniviewdev/base-ui', () => {
+  const Dialog = ({ open, children }: any) => open ? <div data-testid="dialog">{children}</div> : null;
+  Dialog.Title = ({ children }: any) => <h2>{children}</h2>;
+  return {
+    Dialog,
+    Spinner: () => <span />,
+    Progress: () => <div />,
+    IconButton: ({ children, onClick }: any) => <button onClick={onClick}>{children}</button>,
+    Button: ({ children, onClick }: any) => <button onClick={onClick}>{children}</button>,
+    Text: ({ children }: any) => <span>{children}</span>,
+  };
+});
 vi.mock('react-icons/lu', () => ({
   LuCircleCheck: () => <span />,
   LuCircleAlert: () => <span />,
@@ -167,7 +151,7 @@ describe('ConnectionStateProvider', () => {
   });
 
   it('throws when useConnectionStateDialog is used outside provider', () => {
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     expect(() => render(<TestConsumer />)).toThrow(
       'useConnectionStateDialog must be used within a ConnectionStateProvider',
     );

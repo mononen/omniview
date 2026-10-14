@@ -2,15 +2,14 @@ package logs
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/wailsapp/wails/v3/pkg/application"
-	logging "github.com/omniviewdev/plugin-sdk/log"
 
 	"github.com/omniviewdev/omniview/backend/pkg/apperror"
+	logging "github.com/omniviewdev/plugin-sdk/log"
 	"github.com/omniviewdev/plugin-sdk/pkg/v1/logs"
 )
 
@@ -30,7 +29,7 @@ func TestCreateSession_PluginNotFound(t *testing.T) {
 
 	require.Error(t, err)
 	var target *apperror.AppError
-	require.True(t, errors.As(err, &target))
+	require.ErrorAs(t, err, &target)
 	assert.Equal(t, apperror.TypePluginNotFound, target.Type)
 	assert.Equal(t, 404, target.Status)
 	assert.Contains(t, target.Detail, "nonexistent")
@@ -44,7 +43,7 @@ func TestGetSession_SessionNotFound(t *testing.T) {
 
 	require.Error(t, err)
 	var target *apperror.AppError
-	require.True(t, errors.As(err, &target))
+	require.ErrorAs(t, err, &target)
 	assert.Equal(t, apperror.TypeSessionNotFound, target.Type)
 	assert.Equal(t, 404, target.Status)
 	assert.Contains(t, target.Detail, "nonexistent-session")
@@ -58,7 +57,7 @@ func TestCloseSession_SessionNotFound(t *testing.T) {
 
 	require.Error(t, err)
 	var target *apperror.AppError
-	require.True(t, errors.As(err, &target))
+	require.ErrorAs(t, err, &target)
 	assert.Equal(t, apperror.TypeSessionNotFound, target.Type)
 	assert.Equal(t, 404, target.Status)
 	assert.Contains(t, target.Detail, "nonexistent-session")
@@ -72,7 +71,7 @@ func TestSendCommand_SessionNotFound(t *testing.T) {
 
 	require.Error(t, err)
 	var target *apperror.AppError
-	require.True(t, errors.As(err, &target))
+	require.ErrorAs(t, err, &target)
 	assert.Equal(t, apperror.TypeSessionNotFound, target.Type)
 	assert.Equal(t, 404, target.Status)
 	assert.Contains(t, target.Detail, "nonexistent-session")
@@ -86,7 +85,7 @@ func TestUpdateSessionOptions_SessionNotFound(t *testing.T) {
 
 	require.Error(t, err)
 	var target *apperror.AppError
-	require.True(t, errors.As(err, &target))
+	require.ErrorAs(t, err, &target)
 	assert.Equal(t, apperror.TypeSessionNotFound, target.Type)
 	assert.Equal(t, 404, target.Status)
 	assert.Contains(t, target.Detail, "nonexistent-session")

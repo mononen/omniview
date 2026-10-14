@@ -1,7 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Chip } from '@omniviewdev/ui';
-import { IconButton } from '@omniviewdev/ui/buttons';
-import { Tooltip } from '@omniviewdev/ui/overlays';
+import { Chip, IconButton } from '@omniviewdev/base-ui';
 import { LuHammer, LuRefreshCw, LuCircle } from 'react-icons/lu';
 
 import LogViewerContainer from './LogViewer';
@@ -9,10 +7,11 @@ import { createDevBuildSource } from './LogViewer/sources/devBuildSource';
 import { devToolsChannel } from '@/features/devtools/events';
 import type { DevServerState } from '@/features/devtools/types';
 import { getAggregateStatus, STATUS_COLORS } from '@/features/devtools/types';
+import HintTooltip from '@/components/base/HintTooltip';
 
-interface Props {
+type Props = {
   pluginId: string;
-}
+};
 
 const DevBuildViewer: React.FC<Props> = ({ pluginId }) => {
   const source = useMemo(() => createDevBuildSource(pluginId), [pluginId]);
@@ -20,7 +19,10 @@ const DevBuildViewer: React.FC<Props> = ({ pluginId }) => {
 
   useEffect(() => {
     const unsub = devToolsChannel.on('onStatusChange', (state) => {
-      if (state.pluginID !== pluginId) return;
+      if (state.pluginID !== pluginId) {
+        return;
+      }
+
       setServerState(state);
     });
     return unsub;
@@ -30,37 +32,43 @@ const DevBuildViewer: React.FC<Props> = ({ pluginId }) => {
 
   const toolbarPrefix = aggStatus ? (
     <Chip
-      size="sm"
-      emphasis="soft"
-      color={STATUS_COLORS[aggStatus]}
-      icon={<LuCircle size={8} />}
-      label={aggStatus}
-      sx={{ '--Chip-minHeight': '20px', fontSize: '11px' }}
-    />
+      size='xs'
+      variant='soft'
+      color={STATUS_COLORS[aggStatus] === 'primary' ? 'brand' : STATUS_COLORS[aggStatus]}
+      startDecorator={<LuCircle size={8} />}
+    >
+      {aggStatus}
+    </Chip>
   ) : null;
 
   const toolbarActions = useMemo(() => (
     <>
-      <Tooltip content="Rebuild plugin binary">
+      <HintTooltip content='Rebuild plugin binary'>
         <IconButton
-          size="sm"
-          emphasis="ghost"
-          color="neutral"
-          onClick={() => devToolsChannel.emit('onRebuildPlugin', pluginId)}
+          size='sm'
+          variant='ghost'
+          color='neutral'
+          aria-label='Rebuild plugin binary'
+          onClick={() => {
+            devToolsChannel.emit('onRebuildPlugin', pluginId); 
+          }}
         >
           <LuHammer size={14} />
         </IconButton>
-      </Tooltip>
-      <Tooltip content="Restart dev server">
+      </HintTooltip>
+      <HintTooltip content='Restart dev server'>
         <IconButton
-          size="sm"
-          emphasis="ghost"
-          color="neutral"
-          onClick={() => devToolsChannel.emit('onRestartDevServer', pluginId)}
+          size='sm'
+          variant='ghost'
+          color='neutral'
+          aria-label='Restart dev server'
+          onClick={() => {
+            devToolsChannel.emit('onRestartDevServer', pluginId); 
+          }}
         >
           <LuRefreshCw size={14} />
         </IconButton>
-      </Tooltip>
+      </HintTooltip>
     </>
   ), [pluginId]);
 

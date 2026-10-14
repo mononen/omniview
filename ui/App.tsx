@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 
 // ensure we preload deps first before anything
 import { preloadSharedDeps } from './features/plugins/api/preloader';
@@ -19,12 +19,7 @@ import { store } from './store/store';
 import './utils/globalutils';
 import './providers/monaco/bootstrap';
 
-import { StyledEngineProvider } from '@mui/material/styles';
-import { AppTheme, initThemeRegistry } from '@omniviewdev/ui/theme';
-import type { ThemeVariant } from '@omniviewdev/ui/theme';
-import BaseUiTheme from './theme/BaseUiTheme';
-
-initThemeRegistry();
+import AppTheme from './theme/AppTheme';
 
 // Providers
 import { AppSnackbarProvider } from '@/contexts/AppSnackbarProvider';
@@ -35,21 +30,22 @@ import {
   QueryClient,
   QueryClientProvider,
 } from '@tanstack/react-query';
-import { ExtensionProvider, useSettings } from '@omniviewdev/runtime';
+import { ExtensionProvider } from '@omniviewdev/runtime';
 import BottomDrawerProvider from './providers/BottomDrawer/provider';
 import { SettingsProvider } from '@omniviewdev/runtime';
-import { EXTENSION_REGISTRY } from './features/extensions/store'
+import { EXTENSION_REGISTRY } from './features/extensions/store';
 import { ConfirmationModalProvider } from './contexts/ConfirmationModalContext';
 import { ConnectionStateProvider } from './features/connectionState';
 import { OperationsProvider } from '@omniviewdev/runtime';
 import { PluginServiceProvider } from '@/features/plugins';
 import { RouteProvider } from './features/router/RouteProvider';
-import log from '@/features/logger'
+import log from '@/features/logger';
+import { orFallback } from '@/utils/orFallback';
 
 // 2. Global handlers for uncaught errors + promise rejections
-window.addEventListener("error", event => {
+window.addEventListener('error', event => {
   // event.error may be undefined (e.g. script load failures)
-  const err = event.error || new Error(String(event.message));
+  const err = orFallback(event.error, new Error(String(event.message)));
   log.error(err, {
     filename: event.filename,
     lineno: event.lineno,
@@ -57,7 +53,7 @@ window.addEventListener("error", event => {
   });
 });
 
-window.addEventListener("unhandledrejection", event => {
+window.addEventListener('unhandledrejection', event => {
   const reason = event.reason instanceof Error
     ? event.reason
     : new Error(JSON.stringify(event.reason));
@@ -73,49 +69,7 @@ const queryClient = new QueryClient({
   },
 });
 
-log.debug("starting up the application")
-
-const THEME_VARIANT_KEY = 'ov-theme-variant';
-
-function safeGetThemeVariant(): ThemeVariant {
-  try {
-    const stored = localStorage.getItem(THEME_VARIANT_KEY);
-    return stored === 'solarized' ? 'solarized' : 'default';
-  } catch {
-    return 'default';
-  }
-}
-
-function safeSetThemeVariant(value: ThemeVariant): void {
-  try {
-    localStorage.setItem(THEME_VARIANT_KEY, value);
-  } catch {
-    // non-fatal in restricted storage environments
-  }
-}
-
-function AppWithTheme({ children }: { children: React.ReactNode }) {
-  const { settings } = useSettings();
-  const [variant, setVariant] = useState<ThemeVariant>(safeGetThemeVariant);
-
-  const appearanceTheme = settings?.['appearance.theme'];
-
-  useEffect(() => {
-    if (typeof appearanceTheme === 'string') {
-      const resolved: ThemeVariant = appearanceTheme === 'solarized' ? 'solarized' : 'default';
-      if (resolved !== variant) {
-        setVariant(resolved);
-        safeSetThemeVariant(resolved);
-      }
-    }
-  }, [appearanceTheme, variant]);
-
-  return (
-    <AppTheme defaultMode="dark" variant={variant}>
-      <BaseUiTheme>{children}</BaseUiTheme>
-    </AppTheme>
-  );
-}
+log.debug('starting up the application');
 
 /**
  * Render out the core layout for the application
@@ -127,16 +81,15 @@ const App: React.FC = () => {
         <SettingsProvider>
           <ExtensionProvider registry={EXTENSION_REGISTRY}>
             <AppSnackbarProvider>
-              <StyledEngineProvider injectFirst>
-                <Provider store={store}>
-                  <AppWithTheme>
-                    <ErrorBoundary
-                      FallbackComponent={(props) => <FullPageErrorFallback {...props} boundary="Application" />}
-                      onError={onBoundaryError}
-                    >
-                      <OperationsProvider>
-                        <ConfirmationModalProvider>
-                          <ConnectionStateProvider>
+              <Provider store={store}>
+                <AppTheme>
+                  <ErrorBoundary
+                    FallbackComponent={(props) => <FullPageErrorFallback {...props} boundary="Application" />}
+                    onError={onBoundaryError}
+                  >
+                    <OperationsProvider>
+                      <ConfirmationModalProvider>
+                        <ConnectionStateProvider>
                           <RightDrawerProvider>
                             <BottomDrawerProvider>
                               <PluginServiceProvider>
@@ -144,13 +97,12 @@ const App: React.FC = () => {
                               </PluginServiceProvider>
                             </BottomDrawerProvider>
                           </RightDrawerProvider>
-                          </ConnectionStateProvider>
-                        </ConfirmationModalProvider>
-                      </OperationsProvider>
-                    </ErrorBoundary>
-                  </AppWithTheme>
-                </Provider>
-              </StyledEngineProvider>
+                        </ConnectionStateProvider>
+                      </ConfirmationModalProvider>
+                    </OperationsProvider>
+                  </ErrorBoundary>
+                </AppTheme>
+              </Provider>
             </AppSnackbarProvider>
           </ExtensionProvider>
         </SettingsProvider>

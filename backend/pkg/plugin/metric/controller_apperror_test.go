@@ -1,14 +1,13 @@
 package metric
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	logging "github.com/omniviewdev/plugin-sdk/log"
 
 	"github.com/omniviewdev/omniview/backend/pkg/apperror"
+	logging "github.com/omniviewdev/plugin-sdk/log"
 	"github.com/omniviewdev/plugin-sdk/pkg/v1/metric"
 )
 
@@ -23,7 +22,7 @@ func TestQuery_PluginNotFound(t *testing.T) {
 	require.Error(t, err)
 
 	var appErr *apperror.AppError
-	require.True(t, errors.As(err, &appErr))
+	require.ErrorAs(t, err, &appErr)
 	assert.Equal(t, apperror.TypePluginNotFound, appErr.Type)
 	assert.Equal(t, 404, appErr.Status)
 	assert.Contains(t, appErr.Detail, "nonexistent")
@@ -36,7 +35,7 @@ func TestSubscribe_PluginNotFound(t *testing.T) {
 	require.Error(t, err)
 
 	var appErr *apperror.AppError
-	require.True(t, errors.As(err, &appErr))
+	require.ErrorAs(t, err, &appErr)
 	assert.Equal(t, apperror.TypePluginNotFound, appErr.Type)
 	assert.Equal(t, 404, appErr.Status)
 	assert.Contains(t, appErr.Detail, "nonexistent")
@@ -49,7 +48,7 @@ func TestUnsubscribe_SessionNotFound(t *testing.T) {
 	require.Error(t, err)
 
 	var appErr *apperror.AppError
-	require.True(t, errors.As(err, &appErr))
+	require.ErrorAs(t, err, &appErr)
 	assert.Equal(t, apperror.TypeSessionNotFound, appErr.Type)
 	assert.Equal(t, 404, appErr.Status)
 	assert.Contains(t, appErr.Detail, "nonexistent-sub")

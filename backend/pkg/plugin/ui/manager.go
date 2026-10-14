@@ -4,10 +4,9 @@ import (
 	"context"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
-	logging "github.com/omniviewdev/plugin-sdk/log"
 
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/types"
-
+	logging "github.com/omniviewdev/plugin-sdk/log"
 	"github.com/omniviewdev/plugin-sdk/pkg/config"
 )
 
@@ -66,7 +65,7 @@ func (cm *componentManager) ServiceShutdown() error {
 
 var _ types.PluginManager = (*componentManager)(nil)
 
-func (cm *componentManager) OnPluginInit(_ context.Context, pluginID string, meta config.PluginMeta) error {
+func (cm *componentManager) OnPluginInit(_ context.Context, pluginID string, _ config.PluginMeta) error {
 	logger := cm.logger.With(logging.Any("pluginID", pluginID), logging.Any("action", "OnPluginInit"))
 	logger.Debugw(context.Background(), "initializing plugin")
 
@@ -90,7 +89,7 @@ func (cm *componentManager) OnPluginStart(_ context.Context, pluginID string, me
 	return nil
 }
 
-func (cm *componentManager) OnPluginStop(_ context.Context, pluginID string, meta config.PluginMeta) error {
+func (cm *componentManager) OnPluginStop(_ context.Context, pluginID string, _ config.PluginMeta) error {
 	logger := cm.logger.With(logging.Any("pluginID", pluginID), logging.Any("action", "OnPluginStop"))
 	logger.Debugw(context.Background(), "stopping plugin")
 
@@ -99,7 +98,7 @@ func (cm *componentManager) OnPluginStop(_ context.Context, pluginID string, met
 	return nil
 }
 
-func (cm *componentManager) OnPluginShutdown(_ context.Context, pluginID string, meta config.PluginMeta) error {
+func (cm *componentManager) OnPluginShutdown(_ context.Context, pluginID string, _ config.PluginMeta) error {
 	logger := cm.logger.With(logging.Any("pluginID", pluginID), logging.Any("action", "OnPluginShutdown"))
 	logger.Debugw(context.Background(), "shutting down plugin")
 	cm.resourceComponentStore.RemovePlugin(pluginID)
@@ -107,7 +106,7 @@ func (cm *componentManager) OnPluginShutdown(_ context.Context, pluginID string,
 	return nil
 }
 
-func (cm *componentManager) OnPluginDestroy(_ context.Context, pluginID string, meta config.PluginMeta) error {
+func (cm *componentManager) OnPluginDestroy(_ context.Context, pluginID string, _ config.PluginMeta) error {
 	logger := cm.logger.With(logging.Any("pluginID", pluginID), logging.Any("action", "OnPluginDestroy"))
 	logger.Debugw(context.Background(), "destroying plugin")
 	// not super necessary, but just in case
@@ -184,6 +183,7 @@ func loadResourceComponents(meta config.PluginMeta) []ResourceComponent {
 				Resource:       resource,
 				Area:           area,
 				ExtensionPoint: entry.ExtensionPoint,
+				Extensions:     nil,
 			})
 		}
 	}

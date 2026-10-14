@@ -1,10 +1,9 @@
 import React from 'react';
-import Box from '@mui/material/Box';
-import { Text } from '@omniviewdev/ui/typography';
 import type { AnsiSegment, LogEntry as LogEntryType, SearchMatch } from './types';
 import { LEVEL_COLORS } from './types';
+import styles from './LogEntry.module.css';
 
-interface Props {
+type Props = {
   entry: LogEntryType;
   showTimestamps: boolean;
   showSources: boolean;
@@ -14,11 +13,11 @@ interface Props {
   searchMatches?: SearchMatch[];
   /** startOffset of the current match on this line, or -1 if current match is on another line */
   currentMatchOffset?: number;
-}
+};
 
 // Visually distinct colors for source badges (dark-theme-friendly, muted pastels).
 // Each entry is [background, text].
-const SOURCE_COLORS: [string, string][] = [
+const SOURCE_COLORS: Array<[string, string]> = [
   ['#1a3a4a', '#7ec8e3'], // teal
   ['#3a1a4a', '#c87ee3'], // purple
   ['#1a4a2a', '#7ee3a0'], // green
@@ -39,11 +38,15 @@ function sourceColorIndex(id: string): number {
   for (let i = 0; i < id.length; i++) {
     hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
   }
+
   return ((hash % SOURCE_COLORS.length) + SOURCE_COLORS.length) % SOURCE_COLORS.length;
 }
 
 function formatTimestamp(ts: string): string {
-  if (!ts) return '';
+  if (!ts) {
+    return '';
+  }
+
   try {
     const d = new Date(ts);
     return d.toLocaleTimeString(undefined, {
@@ -72,16 +75,41 @@ function ansiStyle(seg: AnsiSegment): React.CSSProperties | undefined {
   if (!seg.fg && !seg.bg && !seg.bold && !seg.dim && !seg.italic && !seg.underline && !seg.strikethrough) {
     return undefined;
   }
+
   const s: React.CSSProperties = {};
-  if (seg.fg) s.color = seg.fg;
-  if (seg.bg) s.backgroundColor = seg.bg;
-  if (seg.bold) s.fontWeight = 'bold';
-  if (seg.dim) s.opacity = 0.7;
-  if (seg.italic) s.fontStyle = 'italic';
+  if (seg.fg) {
+    s.color = seg.fg;
+  }
+
+  if (seg.bg) {
+    s.backgroundColor = seg.bg;
+  }
+
+  if (seg.bold) {
+    s.fontWeight = 'bold';
+  }
+
+  if (seg.dim) {
+    s.opacity = 0.7;
+  }
+
+  if (seg.italic) {
+    s.fontStyle = 'italic';
+  }
+
   const deco: string[] = [];
-  if (seg.underline) deco.push('underline');
-  if (seg.strikethrough) deco.push('line-through');
-  if (deco.length > 0) s.textDecoration = deco.join(' ');
+  if (seg.underline) {
+    deco.push('underline');
+  }
+
+  if (seg.strikethrough) {
+    deco.push('line-through');
+  }
+
+  if (deco.length > 0) {
+    s.textDecoration = deco.join(' ');
+  }
+
   return s;
 }
 
@@ -106,6 +134,7 @@ function renderSearchHighlights(
     if (match.startOffset > lastIndex) {
       parts.push(content.slice(lastIndex, match.startOffset));
     }
+
     const isCurrent = match.startOffset === currentMatchOffset;
     parts.push(
       <span
@@ -122,9 +151,11 @@ function renderSearchHighlights(
     );
     lastIndex = match.endOffset;
   }
+
   if (lastIndex < content.length) {
     parts.push(content.slice(lastIndex));
   }
+
   return parts;
 }
 
@@ -199,6 +230,7 @@ function renderAnsiWithSearch(
         if (globalOffset + segPos >= matchEnd) {
           matchIdx++;
         }
+
         continue;
       }
 
@@ -244,7 +276,7 @@ const LogEntryComponent: React.FC<Props> = ({
 
     // No ANSI segments → plain text with search highlights (original path).
     if (!segments && hasSearch) {
-      return renderSearchHighlights(entry.content, searchMatches!, currentMatchOffset, scrollToMatchRef);
+      return renderSearchHighlights(entry.content, searchMatches, currentMatchOffset, scrollToMatchRef);
     }
 
     // ANSI segments present, no search → styled spans.
@@ -257,73 +289,29 @@ const LogEntryComponent: React.FC<Props> = ({
   };
 
   return (
-    <Box
-      sx={{
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 0.5,
-        px: 1,
-        py: '1px',
-        fontFamily: 'monospace',
-        fontSize: '12px',
-        lineHeight: '18px',
-        borderLeft: levelColor ? `3px solid ${levelColor}` : '3px solid transparent',
-        '&:hover': { bgcolor: 'background.level1' },
-        ...(entry.origin === 'SYSTEM' && {
-          bgcolor: 'background.level2',
-          fontStyle: 'italic',
-          color: 'text.tertiary',
-        }),
-      }}
+    <div
+      className={styles.Row}
+      data-system={entry.origin === 'SYSTEM' || undefined}
+      style={levelColor ? { borderLeftColor: levelColor } : undefined}
     >
       {/* Line number */}
       {showLineNumbers && (
-        <Text
-          sx={{
-            minWidth: '4ch',
-            textAlign: 'right',
-            color: 'text.disabled',
-            userSelect: 'none',
-            flexShrink: 0,
-            fontSize: 'inherit',
-            fontFamily: 'inherit',
-            lineHeight: 'inherit',
-          }}
-        >
-          {entry.lineNumber}
-        </Text>
+        <span className={styles.LineNumber}>{entry.lineNumber}</span>
       )}
 
       {/* Timestamp */}
       {showTimestamps && entry.timestamp && (
-        <Text
-          sx={{
-            color: 'text.secondary',
-            userSelect: 'none',
-            flexShrink: 0,
-            fontSize: 'inherit',
-            fontFamily: 'inherit',
-            lineHeight: 'inherit',
-          }}
-        >
-          {formatTimestamp(entry.timestamp)}
-        </Text>
+        <span className={styles.Timestamp}>{formatTimestamp(entry.timestamp)}</span>
       )}
 
       {/* Source badge */}
       {showSources && entry.sourceId && (
         <span
           title={entry.sourceId}
+          className={styles.Source}
           style={{
-            fontSize: '10px',
-            lineHeight: '16px',
-            height: 16,
-            padding: '0 6px',
-            borderRadius: 4,
             backgroundColor: SOURCE_COLORS[sourceColorIndex(entry.sourceId)][0],
             color: SOURCE_COLORS[sourceColorIndex(entry.sourceId)][1],
-            flexShrink: 0,
-            whiteSpace: 'nowrap',
             userSelect: 'none',
             WebkitUserSelect: 'none',
           }}
@@ -333,21 +321,10 @@ const LogEntryComponent: React.FC<Props> = ({
       )}
 
       {/* Content */}
-      <Text
-        component="span"
-        sx={{
-          flex: 1,
-          fontSize: 'inherit',
-          fontFamily: 'inherit',
-          lineHeight: 'inherit',
-          whiteSpace: wrap ? 'pre-wrap' : 'pre',
-          wordBreak: wrap ? 'break-all' : 'normal',
-          overflow: wrap ? 'hidden' : 'visible',
-        }}
-      >
+      <span className={styles.Content} data-wrap={wrap || undefined}>
         {renderContent()}
-      </Text>
-    </Box>
+      </span>
+    </div>
   );
 };
 

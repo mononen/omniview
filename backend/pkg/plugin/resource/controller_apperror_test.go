@@ -2,17 +2,16 @@ package resource
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	logging "github.com/omniviewdev/plugin-sdk/log"
 
 	"github.com/omniviewdev/omniview/backend/pkg/apperror"
 	"github.com/omniviewdev/omniview/internal/appstate"
-	resource "github.com/omniviewdev/plugin-sdk/pkg/v1/resource"
+	logging "github.com/omniviewdev/plugin-sdk/log"
 	"github.com/omniviewdev/plugin-sdk/pkg/types"
+	resource "github.com/omniviewdev/plugin-sdk/pkg/v1/resource"
 )
 
 // newTestController creates a controller with a no-op logger and no settings
@@ -23,7 +22,10 @@ func newTestController() *controller {
 	storeFn := func(pluginID string) (*appstate.ScopedRoot, error) {
 		panic("unexpected call to pluginStoreFn in test for plugin " + pluginID)
 	}
-	ctrl := NewController(logging.NewNop(), nil, storeFn).(*controller)
+	ctrl, ok := NewController(logging.NewNop(), nil, storeFn).(*controller)
+	if !ok {
+		panic("NewController did not return *controller")
+	}
 	ctrl.Run(context.Background())
 	return ctrl
 }
@@ -34,7 +36,7 @@ func requireAppError(t *testing.T, err error) *apperror.AppError {
 	t.Helper()
 	require.Error(t, err)
 	var appErr *apperror.AppError
-	require.True(t, errors.As(err, &appErr), "expected *apperror.AppError, got %T: %v", err, err)
+	require.ErrorAs(t, err, &appErr, "expected *apperror.AppError, got %T: %v", err, err)
 	return appErr
 }
 

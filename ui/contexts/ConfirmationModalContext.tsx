@@ -1,12 +1,7 @@
-import React, { useState, ReactNode } from 'react';
-import Divider from '@mui/material/Divider';
-import Dialog from '@mui/material/Dialog';
-import DialogTitle from '@mui/material/DialogTitle';
-import DialogContent from '@mui/material/DialogContent';
-import DialogActions from '@mui/material/DialogActions';
-import CircularProgress from '@mui/material/CircularProgress';
-import { Button } from '@omniviewdev/ui/buttons';
-import { ConfirmationModalContext, ConfirmationModalProps } from '@omniviewdev/runtime';
+import React, { useState, type ReactNode } from 'react';
+import { Button, Dialog, Spinner } from '@omniviewdev/base-ui';
+import { ConfirmationModalContext, type ConfirmationModalProps } from '@omniviewdev/runtime';
+import { orFallback } from '@/utils/orFallback';
 
 
 export const ConfirmationModalProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
@@ -20,7 +15,10 @@ export const ConfirmationModalProvider: React.FC<{ children: ReactNode }> = ({ c
   };
 
   const handleConfirm = async () => {
-    if (!config?.onConfirm) return;
+    if (!config?.onConfirm) {
+      return;
+    }
+
     try {
       setPending(true);
       await config.onConfirm();
@@ -35,28 +33,21 @@ export const ConfirmationModalProvider: React.FC<{ children: ReactNode }> = ({ c
   return (
     <ConfirmationModalContext.Provider value={{ show }}>
       {children}
-      <Dialog
-        open={open}
-        onClose={() => setOpen(false)}
-        maxWidth="xs"
-        fullWidth
-        PaperProps={{
-          sx: {
-            boxShadow: 'none',
-          },
-        }}
-      >
-        <DialogTitle>{config?.title || 'Confirm'}</DialogTitle>
-        <Divider />
-        <DialogContent>{config?.body || 'Are you sure?'}</DialogContent>
-        <DialogActions>
-          <Button emphasis="ghost" onClick={() => setOpen(false)}>
-            {config?.cancelLabel || 'Cancel'}
+      <Dialog open={open} onClose={() => {
+        setOpen(false);
+      }} size="sm">
+        <Dialog.Title>{orFallback(config?.title, 'Confirm')}</Dialog.Title>
+        <Dialog.Body>{orFallback(config?.body, 'Are you sure?')}</Dialog.Body>
+        <Dialog.Footer>
+          <Button variant="ghost" color="neutral" onClick={() => {
+            setOpen(false);
+          }}>
+            {orFallback(config?.cancelLabel, 'Cancel')}
           </Button>
-          <Button emphasis="solid" color="danger" onClick={handleConfirm} disabled={pending}>
-            {pending ? <CircularProgress size={16} /> : config?.confirmLabel || 'Confirm'}
+          <Button variant="solid" color="danger" onClick={handleConfirm} disabled={pending}>
+            {pending ? <Spinner size="sm" /> : orFallback(config?.confirmLabel, 'Confirm')}
           </Button>
-        </DialogActions>
+        </Dialog.Footer>
       </Dialog>
     </ConfirmationModalContext.Provider>
   );

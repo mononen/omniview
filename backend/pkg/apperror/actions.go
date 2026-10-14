@@ -4,7 +4,7 @@ package apperror
 // to structured errors. The frontend maps each action type to a concrete UI
 // behaviour (navigation, retry, opening a URL, or clipboard copy).
 type Action struct {
-	Type   string `json:"type"`             // "navigate", "retry", "open-url", "copy"
+	Type   string `json:"type"` // "navigate", "retry", "open-url", "copy"
 	Label  string `json:"label"`
 	Target string `json:"target,omitempty"`
 }
@@ -21,7 +21,7 @@ func OpenURLAction(label, url string) Action {
 
 // RetryAction creates an action that signals the frontend to retry the operation.
 func RetryAction(label string) Action {
-	return Action{Type: "retry", Label: label}
+	return Action{Type: "retry", Label: label, Target: ""}
 }
 
 // CopyAction creates an action that copies text to the clipboard.

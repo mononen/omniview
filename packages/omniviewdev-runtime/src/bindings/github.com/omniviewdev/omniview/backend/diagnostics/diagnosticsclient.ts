@@ -12,56 +12,65 @@
 import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
 
 /**
- * Debug records a debug level log to the log sink
+ * Debug records a debug level log to the log sink.
  */
 export function Debug(msg: string, fields: { [_ in string]?: any }): $CancellablePromise<void> {
     return $Call.ByID(2691208406, msg, fields);
 }
 
 /**
- * Error records an error level log to the log sink
+ * Error records an error level log to the log sink.
  */
 export function Error(msg: string, fields: { [_ in string]?: any }): $CancellablePromise<void> {
     return $Call.ByID(3932965591, msg, fields);
 }
 
 /**
- * Info records an info level log to the log sink
+ * Info records an info level log to the log sink.
  */
 export function Info(msg: string, fields: { [_ in string]?: any }): $CancellablePromise<void> {
     return $Call.ByID(1686862755, msg, fields);
 }
 
 /**
- * Log records an arbitrary log with a set level to the log sink
+ * Log records an arbitrary log with a set level to the log sink.
  */
 export function Log(level: string, msg: string, fields: { [_ in string]?: any }): $CancellablePromise<void> {
     return $Call.ByID(3705442919, level, msg, fields);
 }
 
 /**
- * ReadLog returns the string contents of the log requested
+ * ReadLog returns the string contents of the log requested.
  */
 export function ReadLog(logType: string): $CancellablePromise<string> {
     return $Call.ByID(3024854267, logType);
 }
 
 /**
- * StartTail starts tailing the log to the event stream
+ * ReportStartupReady is called once by the frontend when the shell is first
+ * interactive. marks carries frontend timings (milliseconds). The report is
+ * printed to stderr, and written to $OMNIVIEW_STARTUP_REPORT when set.
+ */
+export function ReportStartupReady(marks: { [_ in string]?: number }): $CancellablePromise<void> {
+    return $Call.ByID(3423289677, marks);
+}
+
+/**
+ * StartTail starts tailing the log to the event stream.
  */
 export function StartTail(logType: string): $CancellablePromise<void> {
     return $Call.ByID(158417611, logType);
 }
 
 /**
- * StopTail stops tailing the log to the event stream
+ * StopTail stops tailing the log to the event stream.
  */
 export function StopTail(logType: string): $CancellablePromise<void> {
     return $Call.ByID(3413815733, logType);
 }
 
 /**
- * Warn records a warn level log to the log sink
+ * Warn records a warn level log to the log sink.
  */
 export function Warn(msg: string, fields: { [_ in string]?: any }): $CancellablePromise<void> {
     return $Call.ByID(2047870999, msg, fields);

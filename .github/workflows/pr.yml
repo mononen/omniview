@@ -56,7 +56,7 @@ jobs:
             artifact-name: pr-build-windows
             build-tags: "production"
             extra-ldflags: "-H windowsgui"
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-24.04' && vars.SELF_HOSTED_LINUX_RUNNER != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.SELF_HOSTED_LINUX_RUNNER) || matrix.os }}
     timeout-minutes: 30
     env:
       GOWORK: "off"
@@ -71,9 +71,19 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      - name: Check for preinstalled Linux dependencies
+        id: linux-preinstalled
+        if: runner.os == 'Linux'
+        run: |
+          # Self-hosted runners may already have these; skip apt (and sudo) when they do.
+          if command -v gcc >/dev/null && pkg-config --exists gtk4 webkitgtk-6.0 wayland-client 2>/dev/null; then
+            echo "GTK4, webkitgtk-6.0 and wayland already installed"
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Prepare Linux package archive cache
         id: linux-packages
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.linux-preinstalled.outputs.present != 'true'
         run: |
           directory=/tmp/omniview-e2e-apt
           mkdir -m 0755 "$directory"
@@ -83,7 +93,7 @@ jobs:
 
       - name: Restore Linux package archives
         id: linux-package-cache
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.linux-preinstalled.outputs.present != 'true'
         uses: actions/cache/restore@v4
         with:
           path: ${{ steps.linux-packages.outputs.directory }}/*.deb
@@ -92,7 +102,7 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-ubuntu24-e2e-apt-v1-${{ hashFiles('.github/workflows/e2e-runner.yml', 'e2e/scripts/browser-dependencies.mjs', 'e2e/package.json', 'pnpm-lock.yaml') }}-
 
       - name: Install Linux dependencies
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.linux-preinstalled.outputs.present != 'true'
         env:
           APT_ARCHIVES_DIRECTORY: ${{ steps.linux-packages.outputs.directory }}
         run: |

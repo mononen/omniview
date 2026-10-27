@@ -32,6 +32,8 @@ Build `@omniviewdev/runtime` before `@omniviewdev/vite-plugin`. The Vite plugin 
 
 npm trusted publishers must target the calling workflow filename: `release.yaml` for stable releases and `nightly.yaml` for nightlies. Both call `.github/workflows/npm-publish.yml`, but npm validates the caller for reusable workflows. Merge publishing-workflow changes to `main` before pushing the release tag so the tagged commit contains the OIDC configuration.
 
+This describes upstream (`omniviewdev/omniview`). In the `mononendev` fork, `release.yaml` and `nightly.yaml` are fork-specific: they build the app, publish a GitHub release and update `mononendev/homebrew-tap`, and do not publish to npm. Keep the fork's versions when merging upstream.
+
 ## Commits
 
 - Do not add `Co-Authored-By` or any Claude attribution to commits or PRs.

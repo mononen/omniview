@@ -16,7 +16,7 @@ env:
 jobs:
   go-checks:
     name: Go checks
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.SELF_HOSTED_LINUX_RUNNER != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.SELF_HOSTED_LINUX_RUNNER) || 'ubuntu-24.04' }}
     outputs:
       c02_corpus_name: ${{ steps.c02-corpus.outputs.corpus_name }}
     steps:
@@ -26,7 +26,17 @@ jobs:
         with:
           node-version: "24.14.0"
 
+      - name: Check for preinstalled Linux dependencies
+        id: linux-preinstalled
+        run: |
+          # Self-hosted runners may already have these; skip apt (and sudo) when they do.
+          if command -v gcc >/dev/null && pkg-config --exists gtk4 webkitgtk-6.0 wayland-client 2>/dev/null; then
+            echo "GTK4, webkitgtk-6.0 and wayland already installed"
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Prepare Linux package archive cache
+        if: steps.linux-preinstalled.outputs.present != 'true'
         id: linux-packages
         run: |
           directory=/tmp/omniview-e2e-apt
@@ -36,6 +46,7 @@ jobs:
           echo "indexes=$(sha256sum /var/lib/apt/lists/*_InRelease | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
 
       - name: Restore Linux package archives
+        if: steps.linux-preinstalled.outputs.present != 'true'
         id: linux-package-cache
         uses: actions/cache/restore@v4
         with:
@@ -45,6 +56,7 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-ubuntu24-e2e-apt-v1-${{ hashFiles('.github/workflows/e2e-runner.yml', 'e2e/scripts/browser-dependencies.mjs', 'e2e/package.json', 'pnpm-lock.yaml') }}-
 
       - name: Install Linux dependencies
+        if: steps.linux-preinstalled.outputs.present != 'true'
         env:
           APT_ARCHIVES_DIRECTORY: ${{ steps.linux-packages.outputs.directory }}
         run: |
@@ -115,7 +127,7 @@ jobs:
 
   bindings-check:
     name: Bindings freshness
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.SELF_HOSTED_LINUX_RUNNER != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.SELF_HOSTED_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -123,7 +135,17 @@ jobs:
         with:
           node-version: "24.14.0"
 
+      - name: Check for preinstalled Linux dependencies
+        id: linux-preinstalled
+        run: |
+          # Self-hosted runners may already have these; skip apt (and sudo) when they do.
+          if command -v gcc >/dev/null && pkg-config --exists gtk4 webkitgtk-6.0 wayland-client 2>/dev/null; then
+            echo "GTK4, webkitgtk-6.0 and wayland already installed"
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Prepare Linux package archive cache
+        if: steps.linux-preinstalled.outputs.present != 'true'
         id: linux-packages
         run: |
           directory=/tmp/omniview-e2e-apt
@@ -133,6 +155,7 @@ jobs:
           echo "indexes=$(sha256sum /var/lib/apt/lists/*_InRelease | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
 
       - name: Restore Linux package archives
+        if: steps.linux-preinstalled.outputs.present != 'true'
         id: linux-package-cache
         uses: actions/cache/restore@v4
         with:
@@ -142,6 +165,7 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-ubuntu24-e2e-apt-v1-${{ hashFiles('.github/workflows/e2e-runner.yml', 'e2e/scripts/browser-dependencies.mjs', 'e2e/package.json', 'pnpm-lock.yaml') }}-
 
       - name: Install Linux dependencies
+        if: steps.linux-preinstalled.outputs.present != 'true'
         env:
           APT_ARCHIVES_DIRECTORY: ${{ steps.linux-packages.outputs.directory }}
         run: |
@@ -181,7 +205,7 @@ jobs:
 
   ui-checks:
     name: UI checks
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_LINUX_RUNNER != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.SELF_HOSTED_LINUX_RUNNER) || 'ubuntu-latest' }}
     needs: go-checks
     steps:
       - uses: actions/checkout@v4

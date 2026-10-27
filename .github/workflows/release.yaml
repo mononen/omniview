@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  id-token: write
 
 concurrency:
   group: release-${{ github.ref_name }}
@@ -26,10 +25,11 @@ env:
   WAILS_MCP: ""
   EXTRA_TAGS: ""
   RELEASE: "true"
+  HOMEBREW_TAP: mononendev/homebrew-tap
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
-  # macOS (darwin/universal) — sign, notarize, DMG
+  # macOS (darwin/arm64, file name kept as "universal") — ad-hoc sign, DMG
   # ─────────────────────────────────────────────────────────────────────────────
   build-macos:
     runs-on: macos-latest
@@ -105,7 +105,7 @@ jobs:
               -X github.com/omniviewdev/omniview/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
               -X github.com/omniviewdev/omniview/internal/version.Development=false \
               -X github.com/omniviewdev/omniview/internal/instance.buildChannel=stable \
-              -X github.com/omniviewdev/registry.OmniviewPublicKeyHex=${{ secrets.REGISTRY_PUBLIC_KEY_HEX }} \
+              -X github.com/omniviewdev/registry.OmniviewPublicKeyHex=${{ vars.REGISTRY_PUBLIC_KEY_HEX }} \
               -X github.com/omniviewdev/omniview/internal/telemetry.buildOTLPEndpoint=${{ secrets.TELEMETRY_OTLP_ENDPOINT }} \
               -X github.com/omniviewdev/omniview/internal/telemetry.buildPyroscopeEndpoint=${{ secrets.TELEMETRY_PYROSCOPE_ENDPOINT }}"
 
@@ -121,35 +121,10 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${version%%[-+]*}" bin/Omniview.app/Contents/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" bin/Omniview.app/Contents/Info.plist
 
-      - name: Import Code-Signing Certificates
-        uses: Apple-Actions/import-codesign-certs@v3
-        with:
-          p12-file-base64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
-          p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
-
-      - name: Sign and Notarize
+      # No Developer ID in this fork: ad-hoc sign. The Homebrew cask strips the quarantine attribute.
+      - name: Ad-hoc sign
         shell: bash
-        env:
-          APPLE_SIGN_ID: ${{ secrets.APPLE_DEVELOPER_SIGN_ID }}
-          NOTARY_USER: ${{ secrets.CLI_MACOS_NOTARY_USER }}
-          NOTARY_PWD: ${{ secrets.CLI_MACOS_NOTARY_PWD }}
-          TEAM_ID: ${{ secrets.CLI_MACOS_TEAM_ID }}
-        run: |
-          codesign --deep --force \
-            --options runtime \
-            --entitlements build/darwin/entitlements.plist \
-            --sign "$APPLE_SIGN_ID" \
-            bin/Omniview.app
-
-          ditto -c -k --keepParent --rsrc bin/Omniview.app archive.zip
-
-          xcrun notarytool submit archive.zip \
-            --apple-id "$NOTARY_USER" \
-            --password "$NOTARY_PWD" \
-            --team-id "$TEAM_ID" \
-            --wait
-
-          xcrun stapler staple bin/Omniview.app
+        run: codesign --deep --force --sign - bin/Omniview.app
 
       - name: Checkout create-dmg
         uses: actions/checkout@v4
@@ -258,7 +233,7 @@ jobs:
               -X github.com/omniviewdev/omniview/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
               -X github.com/omniviewdev/omniview/internal/version.Development=false \
               -X github.com/omniviewdev/omniview/internal/instance.buildChannel=stable \
-              -X github.com/omniviewdev/registry.OmniviewPublicKeyHex=${{ secrets.REGISTRY_PUBLIC_KEY_HEX }} \
+              -X github.com/omniviewdev/registry.OmniviewPublicKeyHex=${{ vars.REGISTRY_PUBLIC_KEY_HEX }} \
               -X github.com/omniviewdev/omniview/internal/telemetry.buildOTLPEndpoint=${{ secrets.TELEMETRY_OTLP_ENDPOINT }} \
               -X github.com/omniviewdev/omniview/internal/telemetry.buildPyroscopeEndpoint=${{ secrets.TELEMETRY_PYROSCOPE_ENDPOINT }}" \
             -o bin/Omniview .
@@ -347,7 +322,7 @@ jobs:
               -X github.com/omniviewdev/omniview/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
               -X github.com/omniviewdev/omniview/internal/version.Development=false \
               -X github.com/omniviewdev/omniview/internal/instance.buildChannel=stable \
-              -X github.com/omniviewdev/registry.OmniviewPublicKeyHex=${{ secrets.REGISTRY_PUBLIC_KEY_HEX }} \
+              -X github.com/omniviewdev/registry.OmniviewPublicKeyHex=${{ vars.REGISTRY_PUBLIC_KEY_HEX }} \
               -X github.com/omniviewdev/omniview/internal/telemetry.buildOTLPEndpoint=${{ secrets.TELEMETRY_OTLP_ENDPOINT }} \
               -X github.com/omniviewdev/omniview/internal/telemetry.buildPyroscopeEndpoint=${{ secrets.TELEMETRY_PYROSCOPE_ENDPOINT }}" \
             -o bin/Omniview.exe .
@@ -363,15 +338,6 @@ jobs:
           path: bin/Omniview_${{ steps.version.outputs.version }}_windows_amd64.exe
           if-no-files-found: error
           retention-days: 1
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # NPM — publish @omniviewdev/* packages (runs in parallel with desktop builds)
-  # ─────────────────────────────────────────────────────────────────────────────
-  publish-npm:
-    uses: ./.github/workflows/npm-publish.yml
-    with:
-      version: ${{ github.ref_name }}
-      dist-tag: latest
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Publish — download all artifacts, checksums, GitHub Release, Homebrew
@@ -417,10 +383,10 @@ jobs:
         if: ${{ !contains(github.ref_name, '-') }}
         shell: bash
         env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
-          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
-            echo "::warning::HOMEBREW_TAP_TOKEN not set, skipping Homebrew update"
+          if [ -z "$HOMEBREW_TAP_DEPLOY_KEY" ]; then
+            echo "::warning::HOMEBREW_TAP_DEPLOY_KEY not set, skipping Homebrew update"
             exit 0
           fi
 
@@ -428,7 +394,11 @@ jobs:
           DMG_FILE="release/Omniview_${VERSION}_darwin_universal.dmg"
           SHA256=$(sha256sum "$DMG_FILE" | awk '{print $1}')
 
-          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/omniviewdev/homebrew-tap.git" tap
+          install -m 600 /dev/null "$RUNNER_TEMP/tap_key"
+          printf '%s\n' "$HOMEBREW_TAP_DEPLOY_KEY" > "$RUNNER_TEMP/tap_key"
+          export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/tap_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+          git clone "git@github.com:${HOMEBREW_TAP}.git" tap
           cd tap
 
           sed -i "s/version \".*\"/version \"${VERSION}\"/" Casks/omniview.rb
@@ -437,5 +407,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Casks/omniview.rb
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
           git commit -m "Update omniview to ${VERSION}"
           git push

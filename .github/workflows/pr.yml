@@ -12,97 +12,26 @@ env:
   NODE_OPTIONS: "--max-old-space-size=4096"
   GO_VERSION: "1.26"
   NODE_VERSION: "24"
-  PNPM_VERSION: "10"
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────────────
-  # E2E Tests — Playwright against server mode (-tags server, no native window)
-  # ─────────────────────────────────────────────────────────────────────────────
+  # One canonical application execution; the exact required check name stays
+  # stable even though reusable workflow checks have a caller/job prefix.
+  e2e-application:
+    uses: ./.github/workflows/e2e-runner.yml
+    with:
+      base: ${{ github.event.pull_request.base.sha }}
+
   e2e-tests:
-    runs-on: ${{ vars.SELF_HOSTED_LINUX_RUNNER != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.SELF_HOSTED_LINUX_RUNNER) || 'ubuntu-latest' }}
-    timeout-minutes: 20
+    name: e2e-tests
+    needs: e2e-application
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      # awalsh128/cache-apt-pkgs-action@latest restores an empty package set here, so install directly.
-      - name: Install Linux dependencies
-        run: |
-          # Self-hosted runners may already have these; skip apt (and sudo) when they do.
-          if command -v gcc >/dev/null && pkg-config --exists gtk4 webkitgtk-6.0 wayland-client 2>/dev/null; then
-            echo "GTK4, webkitgtk-6.0 and wayland already installed"
-          else
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev libwayland-dev build-essential pkg-config
-          fi
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-          run_install: |
-            - args: []
-            - args: [--global, typescript]
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-          cache-dependency-path: "go.sum"
-
-      - name: Install Task
-        uses: arduino/setup-task@v2
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install Wails v3
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)
-
-      - name: Build workspace packages
-        run: task packages
-
-      - name: Install Playwright browsers
-        working-directory: e2e
-        run: pnpm exec playwright install --with-deps chromium
-
-      - name: Build and start server mode
-        run: |
-          task build:server
-          OMNIVIEW_STATE_DIR="$RUNNER_TEMP/omniview-state" bin/Omniview-server > "$RUNNER_TEMP/server.log" 2>&1 &
-          echo "Waiting for server to be ready..."
-          for i in $(seq 1 60); do
-            if curl -sf http://localhost:34115/health > /dev/null 2>&1; then
-              echo "Server ready"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "::error::Server did not become ready"
-          cat "$RUNNER_TEMP/server.log"
-          exit 1
-
-      - name: Run Playwright tests
-        working-directory: e2e
-        run: pnpm test
-
-      - name: Upload test report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report
-          path: |
-            e2e/playwright-report/
-            e2e/test-results/
-          retention-days: 7
+      - name: Require canonical suite or explicit prose-only success
+        env:
+          RESULT: ${{ needs.e2e-application.result }}
+        run: test "$RESULT" = success
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Build Artifacts — downloadable binaries for manual testing
@@ -117,7 +46,7 @@ jobs:
             artifact-name: pr-build-macos
             build-tags: "production"
             extra-ldflags: ""
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             platform: linux/amd64
             artifact-name: pr-build-linux
             build-tags: "production"
@@ -127,38 +56,70 @@ jobs:
             artifact-name: pr-build-windows
             build-tags: "production"
             extra-ldflags: "-H windowsgui"
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && vars.SELF_HOSTED_LINUX_RUNNER != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.SELF_HOSTED_LINUX_RUNNER) || matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-24.04' && vars.SELF_HOSTED_LINUX_RUNNER != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.SELF_HOSTED_LINUX_RUNNER) || matrix.os }}
     timeout-minutes: 30
+    env:
+      GOWORK: "off"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # awalsh128/cache-apt-pkgs-action@latest restores an empty package set here, so install directly.
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          # Self-hosted runners may already have these; skip apt (and sudo) when they do.
-          if command -v gcc >/dev/null && pkg-config --exists gtk4 webkitgtk-6.0 wayland-client 2>/dev/null; then
-            echo "GTK4, webkitgtk-6.0 and wayland already installed"
-          else
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev libwayland-dev build-essential pkg-config
-          fi
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - name: Check for preinstalled Linux dependencies
+        id: linux-preinstalled
+        if: runner.os == 'Linux'
+        run: |
+          # Self-hosted runners may already have these; skip apt (and sudo) when they do.
+          if command -v gcc >/dev/null && pkg-config --exists gtk4 webkitgtk-6.0 wayland-client 2>/dev/null; then
+            echo "GTK4, webkitgtk-6.0 and wayland already installed"
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare Linux package archive cache
+        id: linux-packages
+        if: runner.os == 'Linux' && steps.linux-preinstalled.outputs.present != 'true'
+        run: |
+          directory=/tmp/omniview-e2e-apt
+          mkdir -m 0755 "$directory"
+          echo "directory=$directory" >> "$GITHUB_OUTPUT"
+          sudo apt-get update
+          echo "indexes=$(sha256sum /var/lib/apt/lists/*_InRelease | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Linux package archives
+        id: linux-package-cache
+        if: runner.os == 'Linux' && steps.linux-preinstalled.outputs.present != 'true'
+        uses: actions/cache/restore@v4
         with:
-          version: ${{ env.PNPM_VERSION }}
-          run_install: |
-            - args: []
-            - args: [--global, typescript]
+          path: ${{ steps.linux-packages.outputs.directory }}/*.deb
+          key: ${{ runner.os }}-${{ runner.arch }}-ubuntu24-e2e-apt-v1-${{ hashFiles('.github/workflows/e2e-runner.yml', 'e2e/scripts/browser-dependencies.mjs', 'e2e/package.json', 'pnpm-lock.yaml') }}-${{ steps.linux-packages.outputs.indexes }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-ubuntu24-e2e-apt-v1-${{ hashFiles('.github/workflows/e2e-runner.yml', 'e2e/scripts/browser-dependencies.mjs', 'e2e/package.json', 'pnpm-lock.yaml') }}-
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux' && steps.linux-preinstalled.outputs.present != 'true'
+        env:
+          APT_ARCHIVES_DIRECTORY: ${{ steps.linux-packages.outputs.directory }}
+        run: |
+          node scripts/verify-apt-archives.mjs "$APT_ARCHIVES_DIRECTORY" --prepare
+          sudo install -d -m 0700 -o _apt -g root "$APT_ARCHIVES_DIRECTORY/partial"
+          sudo apt-get -o "Dir::Cache::archives=$APT_ARCHIVES_DIRECTORY" install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev libwayland-dev build-essential pkg-config
+
+      - name: Setup pnpm
+        uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0
+        with:
+          version: 12.14.0
+          install: false
+
+      - name: Install dependencies and global TypeScript
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm add --global typescript
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -175,11 +136,15 @@ jobs:
 
       - name: Install Wails v3
         shell: bash
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)
+        run: GOWORK=off GOFLAGS= bash ./scripts/install-wails-cli.sh
 
       - name: Build workspace packages
         shell: bash
         run: task packages
+
+      - name: Check native Windows React compiler admission
+        if: runner.os == 'Windows'
+        run: node --test scripts/react-compiler.test.mjs
 
       - name: Build frontend
         shell: bash
@@ -193,14 +158,17 @@ jobs:
           CGO_LDFLAGS: ${{ runner.os == 'macOS' && '-mmacosx-version-min=10.15' || '' }}
           MACOSX_DEPLOYMENT_TARGET: ${{ runner.os == 'macOS' && '10.15' || '' }}
         run: |
-          go build -tags "${{ matrix.build-tags }}" -trimpath -buildvcs=false \
+          build_command=(go build -o bin/Omniview)
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            build_command=(bash build/darwin/build-universal.sh bin/Omniview)
+          fi
+          "${build_command[@]}" -tags "${{ matrix.build-tags }}" -trimpath -buildvcs=false \
             -ldflags "-w -s ${{ matrix.extra-ldflags }} \
               -X github.com/omniviewdev/omniview/internal/version.Version=0.0.0-pr.${{ github.event.pull_request.number }} \
               -X github.com/omniviewdev/omniview/internal/version.GitCommit=${{ github.sha }} \
               -X github.com/omniviewdev/omniview/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
               -X github.com/omniviewdev/omniview/internal/version.Development=true \
-              -X github.com/omniviewdev/omniview/internal/appstate.buildStateDir=~/.omniview-pr" \
-            -o bin/Omniview .
+              -X github.com/omniviewdev/omniview/internal/appstate.buildStateDir=~/.omniview-pr"
 
       - name: Create macOS .app bundle
         if: runner.os == 'macOS'
@@ -211,6 +179,8 @@ jobs:
           cp build/darwin/icons.icns bin/Omniview.app/Contents/Resources/
           cp bin/Omniview bin/Omniview.app/Contents/MacOS/
           cp build/darwin/Info.plist bin/Omniview.app/Contents/
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 0.0.0' bin/Omniview.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" bin/Omniview.app/Contents/Info.plist
           codesign --force --deep --sign - bin/Omniview.app
 
       - name: Prepare artifact (macOS)

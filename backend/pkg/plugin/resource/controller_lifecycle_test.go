@@ -48,7 +48,12 @@ func TestOnPluginStart_RegistersProvider(t *testing.T) {
 		LoadConnectionsFunc: func(_ context.Context) ([]types.Connection, error) {
 			return nil, nil
 		},
-		ListenForEventsFunc: func(ctx context.Context, _ resource.WatchEventSink) error {
+		ListenForEventsFunc: func(ctx context.Context, _ resource.WatchEventSink, onReady func() error) error {
+			if onReady != nil {
+				if err := onReady(); err != nil {
+					return err
+				}
+			}
 			<-ctx.Done()
 			return nil
 		},
@@ -181,7 +186,7 @@ func TestListPlugins_ReturnsRegistered(t *testing.T) {
 	registerMockPlugin(ctrl, "p1", &mockProvider{})
 	registerMockPlugin(ctrl, "p2", &mockProvider{})
 
-	plugins, err := ctrl.ListPlugins()
+	plugins, err := ctrl.ListPlugins(testInvocationContext())
 	require.NoError(t, err)
 	assert.Len(t, plugins, 2)
 	assert.Contains(t, plugins, "p1")
@@ -192,8 +197,16 @@ func TestHasPlugin_TrueAndFalse(t *testing.T) {
 	ctrl, _ := newTestControllerWithEmitter(t)
 	registerMockPlugin(ctrl, "p1", &mockProvider{})
 
-	assert.True(t, ctrl.HasPlugin("p1"))
-	assert.False(t, ctrl.HasPlugin("nonexistent"))
+	{
+		present, err := ctrl.HasPlugin(testInvocationContext(), "p1")
+		assert.NoError(t, err)
+		assert.True(t, present)
+	}
+	{
+		present, err := ctrl.HasPlugin(testInvocationContext(), "nonexistent")
+		assert.NoError(t, err)
+		assert.False(t, present)
+	}
 }
 
 // ============================================================================
@@ -203,7 +216,12 @@ func TestHasPlugin_TrueAndFalse(t *testing.T) {
 func TestListenForWatchEvents_ContextCancel(t *testing.T) {
 	ctrl, _ := newTestControllerWithEmitter(t)
 	mock := &mockProvider{
-		ListenForEventsFunc: func(ctx context.Context, _ resource.WatchEventSink) error {
+		ListenForEventsFunc: func(ctx context.Context, _ resource.WatchEventSink, onReady func() error) error {
+			if onReady != nil {
+				if err := onReady(); err != nil {
+					return err
+				}
+			}
 			<-ctx.Done()
 			return nil
 		},
@@ -213,7 +231,7 @@ func TestListenForWatchEvents_ContextCancel(t *testing.T) {
 	sink := &engineWatchSink{pluginID: "p1", ctrl: ctrl, store: ctrl.registryStore, dispatcher: ctrl.dispatcher}
 
 	done := make(chan struct{})
-	ready := make(chan struct{})
+	ready := make(chan error, 1)
 	go func() {
 		ctrl.listenForWatchEvents(ctx, "p1", mock, sink, ready)
 		close(done)
@@ -234,7 +252,12 @@ func TestListenForWatchEvents_ProviderError_CrashRecovery(t *testing.T) {
 	registerMockPlugin(ctrl, "p1", &mockProvider{})
 
 	errorProvider := &mockProvider{
-		ListenForEventsFunc: func(_ context.Context, _ resource.WatchEventSink) error {
+		ListenForEventsFunc: func(_ context.Context, _ resource.WatchEventSink, onReady func() error) error {
+			if onReady != nil {
+				if err := onReady(); err != nil {
+					return err
+				}
+			}
 			return assert.AnError
 		},
 	}
@@ -244,7 +267,7 @@ func TestListenForWatchEvents_ProviderError_CrashRecovery(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(1)
-	ready2 := make(chan struct{})
+	ready2 := make(chan error, 1)
 	go func() {
 		defer wg.Done()
 		ctrl.listenForWatchEvents(ctx, "p1", errorProvider, sink, ready2)
@@ -262,12 +285,17 @@ func TestListenForWatchEvents_ProviderError_ContextDone_NoCrash(t *testing.T) {
 	cancel() // Already cancelled.
 
 	errorProvider := &mockProvider{
-		ListenForEventsFunc: func(_ context.Context, _ resource.WatchEventSink) error {
+		ListenForEventsFunc: func(_ context.Context, _ resource.WatchEventSink, onReady func() error) error {
+			if onReady != nil {
+				if err := onReady(); err != nil {
+					return err
+				}
+			}
 			return assert.AnError
 		},
 	}
 	sink := &engineWatchSink{pluginID: "p1", ctrl: ctrl, store: ctrl.registryStore, dispatcher: ctrl.dispatcher}
-	ready3 := make(chan struct{})
+	ready3 := make(chan error, 1)
 
 	ctrl.listenForWatchEvents(ctx, "p1", errorProvider, sink, ready3)
 

@@ -77,7 +77,7 @@ func TestL3_01_ListRoundTrip(t *testing.T) {
 	grpcProvider := setupGRPCProvider(t, sdkProvider)
 	registerMockPlugin(ctrl, "p1", grpcProvider)
 
-	result, err := ctrl.List("p1", "conn-1", "core::v1::Pod", resource.ListInput{})
+	result, err := ctrl.List(testInvocationContext(), "p1", "conn-1", "core::v1::Pod", resource.ListInput{})
 	require.NoError(t, err)
 	require.True(t, result.Success)
 	require.Len(t, result.Result, 1)
@@ -103,7 +103,7 @@ func TestL3_02_GetRoundTrip(t *testing.T) {
 	grpcProvider := setupGRPCProvider(t, sdkProvider)
 	registerMockPlugin(ctrl, "p1", grpcProvider)
 
-	result, err := ctrl.Get("p1", "conn-1", "core::v1::Pod", resource.GetInput{ID: "my-pod"})
+	result, err := ctrl.Get(testInvocationContext(), "p1", "conn-1", "core::v1::Pod", resource.GetInput{ID: "my-pod"})
 	require.NoError(t, err)
 	require.True(t, result.Success)
 	assert.JSONEq(t, `{"name":"my-pod"}`, string(result.Result))
@@ -120,7 +120,12 @@ func TestL3_03_WatchEventsFlowThroughGRPC(t *testing.T) {
 	ready := make(chan resource.WatchEventSink, 1)
 
 	sdkProvider := resourcetest.NewTestProvider(t,
-		resourcetest.WithListenForEventsFunc(func(ctx context.Context, sink resource.WatchEventSink) error {
+		resourcetest.WithListenForEventsFunc(func(ctx context.Context, sink resource.WatchEventSink, onReady func() error) error {
+			if onReady != nil {
+				if err := onReady(); err != nil {
+					return err
+				}
+			}
 			ready <- sink
 			<-ctx.Done()
 			return nil
@@ -137,7 +142,7 @@ func TestL3_03_WatchEventsFlowThroughGRPC(t *testing.T) {
 	watchCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sink := &engineWatchSink{pluginID: "p1", ctrl: ctrl, store: ctrl.registryStore, dispatcher: ctrl.dispatcher}
-	watchReady := make(chan struct{})
+	watchReady := make(chan error, 1)
 	go ctrl.listenForWatchEvents(watchCtx, "p1", grpcProvider, sink, watchReady)
 
 	// Wait for the SDK provider to receive the sink.
@@ -174,7 +179,12 @@ func TestL3_04_SubscriptionGatingViaGRPC(t *testing.T) {
 
 	ready := make(chan resource.WatchEventSink, 1)
 	sdkProvider := resourcetest.NewTestProvider(t,
-		resourcetest.WithListenForEventsFunc(func(ctx context.Context, sink resource.WatchEventSink) error {
+		resourcetest.WithListenForEventsFunc(func(ctx context.Context, sink resource.WatchEventSink, onReady func() error) error {
+			if onReady != nil {
+				if err := onReady(); err != nil {
+					return err
+				}
+			}
 			ready <- sink
 			<-ctx.Done()
 			return nil
@@ -189,7 +199,7 @@ func TestL3_04_SubscriptionGatingViaGRPC(t *testing.T) {
 	watchCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sink := &engineWatchSink{pluginID: "p1", ctrl: ctrl, store: ctrl.registryStore, dispatcher: ctrl.dispatcher}
-	watchReady := make(chan struct{})
+	watchReady := make(chan error, 1)
 	go ctrl.listenForWatchEvents(watchCtx, "p1", grpcProvider, sink, watchReady)
 
 	select {
@@ -226,7 +236,12 @@ func TestL3_05_StateEventKeyFormatViaGRPC(t *testing.T) {
 
 	ready := make(chan resource.WatchEventSink, 1)
 	sdkProvider := resourcetest.NewTestProvider(t,
-		resourcetest.WithListenForEventsFunc(func(ctx context.Context, sink resource.WatchEventSink) error {
+		resourcetest.WithListenForEventsFunc(func(ctx context.Context, sink resource.WatchEventSink, onReady func() error) error {
+			if onReady != nil {
+				if err := onReady(); err != nil {
+					return err
+				}
+			}
 			ready <- sink
 			<-ctx.Done()
 			return nil
@@ -239,7 +254,7 @@ func TestL3_05_StateEventKeyFormatViaGRPC(t *testing.T) {
 	watchCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sink := &engineWatchSink{pluginID: "p1", ctrl: ctrl, store: ctrl.registryStore, dispatcher: ctrl.dispatcher}
-	watchReady := make(chan struct{})
+	watchReady := make(chan error, 1)
 	go ctrl.listenForWatchEvents(watchCtx, "p1", grpcProvider, sink, watchReady)
 
 	select {
@@ -288,9 +303,9 @@ func TestL3_06_ErrorPropagationViaGRPC(t *testing.T) {
 	grpcProvider := setupGRPCProvider(t, sdkProvider)
 	registerMockPlugin(ctrl, "p1", grpcProvider)
 
-	_, err := ctrl.List("p1", "conn-1", "core::v1::Pod", resource.ListInput{})
+	_, err := ctrl.List(testInvocationContext(), "p1", "conn-1", "core::v1::Pod", resource.ListInput{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "connection refused")
+	assert.Equal(t, "PROVIDER_ERROR", requireAppError(t, err).Code)
 }
 
 // ============================================================================
@@ -302,7 +317,12 @@ func TestL3_07_MixedEventsViaGRPC(t *testing.T) {
 
 	ready := make(chan resource.WatchEventSink, 1)
 	sdkProvider := resourcetest.NewTestProvider(t,
-		resourcetest.WithListenForEventsFunc(func(ctx context.Context, sink resource.WatchEventSink) error {
+		resourcetest.WithListenForEventsFunc(func(ctx context.Context, sink resource.WatchEventSink, onReady func() error) error {
+			if onReady != nil {
+				if err := onReady(); err != nil {
+					return err
+				}
+			}
 			ready <- sink
 			<-ctx.Done()
 			return nil
@@ -318,7 +338,7 @@ func TestL3_07_MixedEventsViaGRPC(t *testing.T) {
 	watchCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sink := &engineWatchSink{pluginID: "p1", ctrl: ctrl, store: ctrl.registryStore, dispatcher: ctrl.dispatcher}
-	watchReady := make(chan struct{})
+	watchReady := make(chan error, 1)
 	go ctrl.listenForWatchEvents(watchCtx, "p1", grpcProvider, sink, watchReady)
 
 	select {

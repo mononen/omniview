@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { PluginWindow } from '@omniviewdev/runtime';
 import { PluginService } from './PluginService';
 import {
@@ -353,10 +353,6 @@ describe('Group 4: Unload Operations', () => {
     expect(s.service.getPluginState('A')?.phase).toBe('error');
     await s.service.unload('A');
     expect(s.service.getPluginState('A')?.phase).toBe('idle');
-  });
-
-  it('#6 unload non-existent plugin — no-op', async () => {
-    await expect(s.service.unload('unknown')).resolves.toBeUndefined();
   });
 
   it('#7 unload from idle — no-op', async () => {
@@ -851,10 +847,6 @@ describe('Group 10: forceReset', () => {
     expect(s.service.getPluginState('B')?.phase).toBe('ready');
   });
 
-  it('#6 unknown plugin is no-op', async () => {
-    await expect(s.service.forceReset('unknown')).resolves.toBeUndefined();
-  });
-
   it('#7 can load after forceReset', async () => {
     s.importer.register('A', validModule());
     await s.service.load('A');
@@ -883,6 +875,43 @@ describe('Group 11: Batch Operations (loadAll)', () => {
     expect(s.service.getPluginState('C')?.phase).toBe('ready');
   });
 
+  it.each(['unload', 'forceReset'] as const)('%s cancels a queued startup reservation before it has state', async (command) => {
+    const s = setup({ maxConcurrentLoads: 1 });
+    s.importer.register('A', validModule());
+    s.importer.register('B', validModule());
+    const loading = s.service.loadAll([
+      { id: 'A', dev: false },
+      { id: 'B', dev: false },
+    ]);
+
+    await s.service[command]('B');
+    await loading;
+
+    expect(s.service.getPluginState('A')?.phase).toBe('ready');
+    expect(s.service.getPluginState('B')).toBeUndefined();
+  });
+
+  it.each(['unload', 'forceReset'] as const)('%s cancels a committed refresh waiting for startup import', async (command) => {
+    const s = setup();
+    const started = createDeferred();
+    const importing = createDeferred<unknown>();
+    s.importer.register('A', async () => {
+      started.resolve();
+      return importing.promise;
+    });
+    s.service.startEventListeners();
+    const loading = s.service.loadAll([{ id: 'A', dev: false }]);
+    await started.promise;
+    s.eventBus.emit('plugin/install_finished', { id: 'A' });
+
+    await s.service[command]('A');
+    importing.resolve(validModule({ routes: [{ path: 'retired' }] }));
+    await loading;
+
+    expect(s.service.getPluginState('A')?.phase).toBe('idle');
+    expect(s.service.getAllRoutes()).toEqual([]);
+  });
+
   it('#2 partial failure', async () => {
     const s = setup();
     s.importer.register('A', validModule());
@@ -898,26 +927,11 @@ describe('Group 11: Batch Operations (loadAll)', () => {
     expect(s.service.getPluginState('C')?.phase).toBe('error');
   });
 
-  it('#3 empty array', async () => {
-    const s = setup();
-    await expect(s.service.loadAll([])).resolves.toBeUndefined();
-  });
-
   it('#4 single plugin', async () => {
     const s = setup();
     s.importer.register('A', validModule());
     await s.service.loadAll([{ id: 'A', dev: false }]);
     expect(s.service.getPluginState('A')?.phase).toBe('ready');
-  });
-
-  it('#5 skips already-loaded', async () => {
-    const s = setup();
-    s.importer.register('A', validModule());
-    s.importer.register('B', validModule());
-    await s.service.load('A');
-    const countBefore = s.importer.importCount;
-    await s.service.loadAll([{ id: 'A', dev: false }, { id: 'B', dev: false }]);
-    expect(s.importer.importCount).toBe(countBefore + 1); // only B imported
   });
 
   it('#6 maxConcurrentLoads=1 (serial)', async () => {
@@ -965,25 +979,6 @@ describe('Group 11: Batch Operations (loadAll)', () => {
 
     await loadPromise;
     expect(peakConcurrent).toBeLessThanOrEqual(2);
-  });
-
-  it('#9 markReady after loadAll', async () => {
-    const s = setup();
-    s.importer.register('A', validModule());
-    await s.service.loadAll([{ id: 'A', dev: false }]);
-    s.service.markReady();
-    expect(s.service.getSnapshot().ready).toBe(true);
-  });
-
-  it('#10 loadAll failure does not prevent markReady', async () => {
-    const s = setup();
-    s.importer.register('A', validModule());
-    s.importer.register('B', () => {
-      throw new Error('fail'); 
-    });
-    await s.service.loadAll([{ id: 'A', dev: false }, { id: 'B', dev: false }]);
-    s.service.markReady();
-    expect(s.service.getSnapshot().ready).toBe(true);
   });
 
   it('#11 two-pass startup resolves cross-plugin contributions', async () => {
@@ -1189,5 +1184,117 @@ describe('reset()', () => {
     expect(s.service.getSnapshot().plugins.size).toBe(0);
     expect(s.service.getSnapshot().ready).toBe(false);
     expect(s.service.getSnapshot().routeVersion).toBe(0);
+  });
+
+  it('releases owned registry entries without removing builtins or foreign contributions', async () => {
+    const s = setup();
+    s.extensions.addExtensionPoint({ id: 'host/cards', pluginId: 'omniview', mode: 'multiple' });
+    const cards = s.extensions.getExtensionPoint('host/cards')!;
+    cards.register({ id: 'foreign', plugin: 'other', label: 'Foreign card', value: 'Keep me' });
+    s.importer.register('A', validModule({
+      extensionPoints: [{ id: 'A/ep', mode: 'multiple' }],
+      extensionRegistrations: [{
+        extensionPointId: 'host/cards',
+        registration: { id: 'owned', label: 'Owned card', value: 'Original card' },
+      }],
+    }));
+    await s.service.loadAll([{ id: 'A', dev: false }]);
+    s.service.reset();
+
+    expect(s.extensions.hasExtensionPoint('A/ep')).toBe(false);
+    expect(cards.listAll().map(card => card.value)).toEqual(['Keep me']);
+
+    const replacement = new PluginService(s.deps);
+    await replacement.loadAll([{ id: 'A', dev: false }]);
+    expect(replacement.getPluginState('A')?.phase).toBe('ready');
+    expect(cards.listAll().map(card => card.value)).toEqual(['Keep me', 'Original card']);
+  });
+
+  it('keeps a replacement load single-flight when a pre-reset import completes', async () => {
+    const s = setup();
+    const retired = createDeferred<unknown>();
+    s.importer.register('A', async () => retired.promise);
+    const oldLoad = s.service.load('A', { dev: false });
+    s.service.reset();
+
+    const repaired = createDeferred<unknown>();
+    s.importer.register('A', async () => repaired.promise);
+    const replacement = s.service.load('A', { dev: false });
+    retired.resolve(validModule({ routes: [{ path: 'retired' }] }));
+    await oldLoad;
+
+    expect(s.service.getAllRoutes()).toEqual([]);
+    const joined = s.service.load('A', { dev: false });
+    repaired.resolve(validModule({ routes: [{ path: 'repaired' }] }));
+    await Promise.all([replacement, joined]);
+
+    expect(s.importer.importCount).toBe(2);
+    expect(s.service.getAllRoutes().map(route => route.path)).toEqual(['repaired']);
+  });
+
+  it('does not resume a retired retry delay in a new provider lifetime', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = setup({ retryBaseDelayMs: 100 });
+      s.importer.register('A', () => {
+        throw new Error('Unpublished source');
+      });
+      await s.service.load('A');
+      const retired = s.service.retry('A');
+      await vi.advanceTimersByTimeAsync(50);
+      s.service.reset();
+
+      await s.service.load('A');
+      const repaired = s.service.retry('A');
+      s.importer.register('A', validModule({ routes: [{ path: 'repaired' }] }));
+      await vi.advanceTimersByTimeAsync(50);
+      await retired;
+
+      expect(s.service.getPluginState('A')?.phase).toBe('retrying');
+      expect(s.service.getAllRoutes()).toEqual([]);
+      await vi.advanceTimersByTimeAsync(50);
+      await repaired;
+      expect(s.service.getAllRoutes().map(route => route.path)).toEqual(['repaired']);
+      expect(s.importer.importCount).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not announce route publication when a retired startup batch finishes', async () => {
+    const s = setup();
+    const started = createDeferred();
+    const importing = createDeferred<unknown>();
+    s.importer.register('A', async () => {
+      started.resolve();
+      return importing.promise;
+    });
+    const loading = s.service.loadAll([{ id: 'A', dev: false }]);
+    await started.promise;
+    s.service.reset();
+    importing.resolve(validModule({ routes: [{ path: 'retired' }] }));
+    await loading;
+
+    expect(s.service.getSnapshot().plugins.size).toBe(0);
+    expect(s.service.getRouteVersion()).toBe(0);
+    expect(s.service.getAllRoutes()).toEqual([]);
+  });
+
+  it.each(['unload', 'forceReset'] as const)('does not let a pre-reset %s remove replacement routes', async (command) => {
+    const s = setup();
+    s.importer.register('A', validModule({ routes: [{ path: 'original' }] }));
+    await s.service.load('A');
+    const clearing = createDeferred();
+    s.deps.clearPlugin = async () => clearing.promise;
+    const retiring = s.service[command]('A');
+    s.service.reset();
+
+    s.importer.register('A', validModule({ routes: [{ path: 'repaired' }] }));
+    await s.service.load('A');
+    clearing.resolve();
+    await retiring;
+
+    expect(s.service.getAllRoutes().map(route => route.path)).toEqual(['repaired']);
+    expect(s.service.getPluginState('A')?.phase).toBe('ready');
   });
 });

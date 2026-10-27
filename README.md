@@ -65,6 +65,24 @@ To begin transforming your DevOps experience with Omniview, follow these steps:
 
 This build's UI runs on `@omniviewdev/base-ui` and no longer ships MUI, Emotion or the legacy `@omniviewdev/ui` design system to plugins. Plugins whose UI still imports those packages (older releases from the upstream marketplace) will not load; use plugin releases built against base-ui.
 
+For contributors: resource-toolbar controls should consistently request `size="sm"` and rely on the shared density scale rather than fixed pixel heights.
+
+The titlebar search owns a flexible 500px preferred-width region; adjacent header regions share the remaining width. Keep sizing on the region rather than imposing a minimum width on the input, so narrow windows can shrink without clipping decorators.
+
+Plugin imports of `@omniviewdev/base-ui/styles.css` must resolve through `ui/theme/base-ui.css`, the same layered entry used by the host. Loading the package stylesheet directly a second time bypasses the cascade layer and can override host component sizing and spacing after plugin startup.
+
+Compact filter popovers use `size="sm"` and let the shared popup own outer padding and inter-section gaps. Group headings and controls into sections instead of adding another padded surface inside the popup.
+
+### Developing against published UI patches
+
+`task dev` starts an explicitly selected development workspace; it no longer mutates dependency versions implicitly. Use `task ui:update` separately to refresh published Base UI, AI UI, and Editors within their declared ranges, then review and commit intended lockfile changes.
+
+Named workspaces use selected local source overlays rather than consuming unpublished sibling changes accidentally. Running `pnpm dev` directly starts only Vite, not an isolated host. See [development workspaces](docs/development-workspaces.md) and the [native toolchain](docs/development-native-toolchain.md) for explicit state selection and bootstrap-aware Go commands.
+
+The root manifest’s `packageManager` field is the single pnpm version source for local development and GitHub Actions. Workflow setup steps intentionally omit a separate pnpm version. CI and release workflows continue using frozen lockfile installs; review and commit intended lockfile changes from development.
+
+`task check:ui-typecheck` checks application and test programs separately. The test configuration explicitly loads React diagnostic augmentation types, so component flags such as `whyDidYouRender` do not depend on unrelated imports being present.
+
 ## Documentation
 
 For detailed instructions, tutorials, and API documentation, visit our [official documentation](https://docs.omniview.dev/docs/introduction).

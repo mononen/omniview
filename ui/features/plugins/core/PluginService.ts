@@ -294,13 +294,15 @@ export class PluginService {
 
     this.deps.log.debug(`Loading plugin "${pluginId}"`, { plugin: pluginId });
 
-    const promise = this.doLoad(pluginId, opts ?? {});
+    const promise = this.doLoad(pluginId, opts);
     this.inflightLoads.set(pluginId, promise);
 
     try {
       await promise;
     } finally {
-      this.inflightLoads.delete(pluginId);
+      if (this.inflightLoads.get(pluginId) === promise) {
+        this.inflightLoads.delete(pluginId);
+      }
     }
   }
 
@@ -324,19 +326,23 @@ export class PluginService {
     this.inflightLoads.set(pluginId, promise);
 
     try {
+      // Reserve the operation before publishing loading to reentrant callers.
+      this.notify();
       await promise;
     } finally {
-      this.inflightLoads.delete(pluginId);
+      if (this.inflightLoads.get(pluginId) === promise) {
+        this.inflightLoads.delete(pluginId);
+      }
     }
   }
 
   async unload(pluginId: string): Promise<void> {
     const current = this.state.get(pluginId);
-    if (!current) {
-      return;
-    }
+    if (!current || current.phase === 'idle') {
+      if (this.inflightLoads.delete(pluginId)) {
+        this.bumpLoadGeneration(pluginId);
+      }
 
-    if (current.phase === 'idle') {
       return;
     }
 
@@ -344,15 +350,17 @@ export class PluginService {
 
     // Cancel inflight loads
     this.inflightLoads.delete(pluginId);
-    this.bumpLoadGeneration(pluginId);
+    const generation = this.bumpLoadGeneration(pluginId);
 
     if (current.phase === 'ready') {
       this.transition(pluginId, 'unloading');
+      this.notify();
     }
 
-    // Clear module cache
-    if (current.phase === 'ready' || current.phase === 'loading' || current.phase === 'unloading') {
-      await this.deps.clearPlugin({ pluginId, dev: current.isDev });
+    // Failed imports and invalid exports are cached too.
+    await this.deps.clearPlugin({ pluginId, dev: current.isDev });
+    if (!this.isCurrentGeneration(pluginId, generation)) {
+      return;
     }
 
     // Remove registrations
@@ -384,15 +392,16 @@ export class PluginService {
     }
 
     const delay = this.computeRetryDelay(current.retryCount);
+    const generation = this.bumpLoadGeneration(pluginId);
     this.transition(pluginId, 'retrying');
 
     if (delay > 0) {
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
 
-    // After delay, check if still retrying (could have been force-reset)
+    // A reset/restart may already have begun another retry of this plugin.
     const afterDelay = this.state.get(pluginId);
-    if (!afterDelay || afterDelay.phase !== 'retrying') {
+    if (!this.isCurrentGeneration(pluginId, generation) || afterDelay?.phase !== 'retrying') {
       return;
     }
 
@@ -400,22 +409,41 @@ export class PluginService {
 
     this.transition(pluginId, 'loading', { retryCount });
 
-    const generation = this.bumpLoadGeneration(pluginId);
-
     try {
+      const resolved = opts === undefined
+        ? await this.deps.getPluginDescriptor(pluginId)
+        : {
+          dev: opts.dev ?? current.isDev,
+          devPort: opts.devPort ?? current.devPort ?? undefined,
+          moduleHash: opts.moduleHash,
+        };
+      if (!this.isCurrentGeneration(pluginId, generation)) {
+        return;
+      }
+
       this.deps.ensureBuiltinExtensionPoints();
 
-      if (opts?.dev === true || current.isDev) {
+      if (resolved.dev) {
         await this.deps.ensureDevSharedDeps();
       }
 
-      await this.deps.clearPlugin({ pluginId, dev: opts?.dev ?? current.isDev });
+      if (!this.isCurrentGeneration(pluginId, generation)) {
+        return;
+      }
+
+      await this.deps.clearPlugin({ pluginId, dev: current.isDev });
+
+      if (!this.isCurrentGeneration(pluginId, generation)) {
+        return;
+      }
+
+      this.recordAttemptedSource(pluginId, resolved);
 
       const rawModule = await this.withImportTimeout(pluginId, this.deps.importPlugin({
         pluginId,
-        dev: opts?.dev ?? current.isDev,
-        devPort: opts?.devPort ?? current.devPort ?? undefined,
-        moduleHash: opts?.moduleHash,
+        dev: resolved.dev,
+        devPort: resolved.devPort,
+        moduleHash: resolved.moduleHash,
       }));
 
       if (!this.isCurrentGeneration(pluginId, generation)) {
@@ -471,11 +499,11 @@ export class PluginService {
         pluginWindow: validated.plugin,
         loadedAt: Date.now(),
         retryCount: 0,
-        isDev: opts?.dev ?? current.isDev,
-        devPort: opts?.devPort ?? current.devPort,
+        isDev: resolved.dev ?? false,
+        devPort: resolved.devPort ?? null,
         error: null,
         validationErrors: [],
-        moduleHash: opts?.moduleHash ?? null,
+        moduleHash: resolved.moduleHash ?? null,
         declaredDependencies,
       });
 
@@ -497,6 +525,10 @@ export class PluginService {
   async forceReset(pluginId: string): Promise<void> {
     const current = this.state.get(pluginId);
     if (!current) {
+      if (this.inflightLoads.delete(pluginId)) {
+        this.bumpLoadGeneration(pluginId);
+      }
+
       return;
     }
 
@@ -504,10 +536,13 @@ export class PluginService {
 
     // Cancel inflight
     this.inflightLoads.delete(pluginId);
-    this.bumpLoadGeneration(pluginId);
+    const generation = this.bumpLoadGeneration(pluginId);
 
     // Clear module cache
     await this.deps.clearPlugin({ pluginId, dev: current.isDev });
+    if (!this.isCurrentGeneration(pluginId, generation)) {
+      return;
+    }
 
     // Remove registrations
     this.removePluginRegistrations(pluginId);
@@ -547,118 +582,28 @@ export class PluginService {
     // Filter out already-loaded
     const toLoad = plugins.filter((p) => {
       const existing = this.state.get(p.id);
-      return !existing || existing.phase === 'idle';
+      return !this.inflightLoads.has(p.id) && (!existing || existing.phase === 'idle');
     });
 
     if (toLoad.length === 0) {
       return;
     }
 
-    // Pass 1: Import + validate + normalize in bounded parallel chunks
-    const prepared: PreparedPluginLoad[] = [];
-    const chunks: PluginDescriptor[][] = [];
-    for (let i = 0; i < toLoad.length; i += this.config.maxConcurrentLoads) {
-      chunks.push(toLoad.slice(i, i + this.config.maxConcurrentLoads));
+    // Reserve queued participants before any import starts, through publication.
+    const batch: Promise<void> = Promise.resolve().then(async () => this.loadBatch(toLoad, batch));
+    for (const plugin of toLoad) {
+      this.inflightLoads.set(plugin.id, batch);
     }
 
-    for (const chunk of chunks) {
-      const settled = await Promise.allSettled(
-        chunk.map(async (p) => this.prepareLoadCandidate(p.id, p)),
-      );
-
-      for (const result of settled) {
-        if (result.status === 'fulfilled') {
-          prepared.push(result.value);
-        }
-        // Rejected: prepareLoadCandidate already transitioned to error
-      }
-    }
-
-    // Pass 2a: Register all plugin-defined extension points first
-    for (const p of prepared) {
-      this.registerExtensionPoints(p.pluginId, p.extensionPoints);
-      this.definedExtensionPointIdsByPlugin.set(p.pluginId, p.extensionPoints.map((ep) => ep.id));
-    }
-
-    // Pass 2b: Apply all contributions/routes
-    let readyCount = 0;
-    let failedCount = 0;
-    for (const p of prepared) {
-      try {
-        this.applyContributions(p.pluginId, p.normalizedContributions);
-        this.normalizedContributionsByPlugin.set(p.pluginId, p.normalizedContributions);
-        this.registrations.set(p.pluginId, p.registrations);
-
-        this.transition(p.pluginId, 'ready', {
-          pluginWindow: p.pluginWindow,
-          loadedAt: Date.now(),
-          retryCount: 0,
-          isDev: p.isDev,
-          devPort: p.devPort,
-          error: null,
-          validationErrors: [],
-          moduleHash: p.moduleHash,
-          declaredDependencies: p.declaredDependencies,
-        });
-
-        readyCount++;
-
-        // Emit deprecation warnings for legacy exports
-        this.emitLegacyDeprecationWarnings(p.pluginId, p.validated);
-      } catch (err) {
-        failedCount++;
-        this.handleLoadError(p.pluginId, err, 0);
-      }
-    }
-
-    // Replay pending contributions only for EPs from plugins that reached ready.
-    const allNewEpIds: string[] = [];
-    for (const p of prepared) {
-      const ps = this.state.get(p.pluginId);
-      if (ps?.phase === 'ready') {
-        allNewEpIds.push(...p.extensionPoints.map((ep) => ep.id));
-      }
-    }
-
-    if (allNewEpIds.length > 0) {
-      this.replayContributionsForExtensionPoints(allNewEpIds);
-    }
-
-    // F1: Register dependency metadata and run diagnostics
-    for (const p of prepared) {
-      if (p.declaredDependencies) {
-        this.dependencyAnalyzer.addPlugin(p.pluginId, p.declaredDependencies);
-      }
-    }
-
-    // Check for cycles after all plugins loaded
-    const cycles = this.dependencyAnalyzer.detectCycles();
-    if (cycles.length > 0) {
-      this.deps.log.warn(
-        `Dependency cycle detected among plugins: ${cycles.map((c) => c.join(' -> ')).join('; ')}`,
-        { cycles },
-      );
-    }
-
-    // Emit missing dependency advisories
-    for (const p of prepared) {
-      if (p.declaredDependencies) {
-        const warnings = this.getDependencyWarnings(p.pluginId);
-        for (const w of warnings) {
-          this.deps.log.warn(w, { pluginId: p.pluginId });
+    try {
+      await batch;
+    } finally {
+      for (const plugin of toLoad) {
+        if (this.inflightLoads.get(plugin.id) === batch) {
+          this.inflightLoads.delete(plugin.id);
         }
       }
     }
-
-    // Count plugins that failed during prepare (not in prepared array)
-    failedCount += toLoad.length - prepared.length;
-
-    this.deps.log.debug(
-      `loadAll complete: ${readyCount} ready, ${failedCount} failed (${toLoad.length} total)`,
-      { readyCount, failedCount, total: toLoad.length },
-    );
-
-    this.bumpRouteVersion();
   }
 
   // ── Event Listeners ─────────────────────────────────────────────
@@ -674,12 +619,7 @@ export class PluginService {
           return;
         }
 
-        const existing = this.state.get(meta.id);
-        if (existing?.phase === 'ready') {
-          void this.reload(meta.id);
-        } else {
-          void this.load(meta.id);
-        }
+        void this.refreshCommittedPlugin(meta.id);
       }),
 
       this.deps.onEvent('plugin/update_complete', (data: { pluginID?: string }) => {
@@ -687,12 +627,7 @@ export class PluginService {
           return;
         }
 
-        const existing = this.state.get(data.pluginID);
-        if (existing?.phase === 'ready') {
-          void this.reload(data.pluginID);
-        } else {
-          void this.load(data.pluginID);
-        }
+        void this.refreshCommittedPlugin(data.pluginID);
       }),
 
       this.deps.onEvent('plugin/dev_reload_complete', (meta: { id?: string }) => {
@@ -708,7 +643,7 @@ export class PluginService {
           return;
         }
 
-        void this.reload(meta.id);
+        void this.refreshCommittedPlugin(meta.id);
       }),
 
       // Payload is StateChangePayload: the new phase is `to`.
@@ -788,13 +723,30 @@ export class PluginService {
 
   reset(): void {
     this.stopEventListeners();
+    const pluginIds = new Set([...this.state.keys(), ...this.inflightLoads.keys()]);
+    // Retire every operation before releasing registry entries. Keep generations
+    // monotonic so a new load cannot reuse an outstanding import's token.
+    for (const pluginId of pluginIds) {
+      this.bumpLoadGeneration(pluginId);
+    }
+
+    this.inflightLoads.clear();
+    for (const pluginId of pluginIds) {
+      const current = this.state.get(pluginId);
+      this.removePluginRegistrations(pluginId);
+      void this.deps.clearPlugin({ pluginId, dev: current?.isDev }).catch((err: unknown) => {
+        this.deps.log.error(`Failed to clear retired plugin "${pluginId}"`, {
+          plugin: pluginId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+
     this.state.clear();
     this.registrations.clear();
-    this.inflightLoads.clear();
     this.normalizedContributionsByPlugin.clear();
     this.definedExtensionPointIdsByPlugin.clear();
     this.pendingContributionsByExtensionPoint.clear();
-    this.loadGeneration.clear();
     this.legacyWarningEmitted.clear();
     this.quarantineManager.clearAll();
     this.deps.crashData.clearAll();
@@ -807,15 +759,176 @@ export class PluginService {
     this.notify();
   }
 
+  private async loadBatch(toLoad: PluginDescriptor[], owner: Promise<void>): Promise<void> {
+    // Pass 1: Import + validate + normalize in bounded parallel chunks
+    const prepared: PreparedPluginLoad[] = [];
+    const chunks: PluginDescriptor[][] = [];
+    for (let i = 0; i < toLoad.length; i += this.config.maxConcurrentLoads) {
+      chunks.push(toLoad.slice(i, i + this.config.maxConcurrentLoads));
+    }
+
+    for (const chunk of chunks) {
+      const settled = await Promise.allSettled(
+        chunk.map(async (p) => this.inflightLoads.get(p.id) === owner
+          ? this.prepareLoadCandidate(p.id, p, owner)
+          : undefined),
+      );
+
+      for (const result of settled) {
+        if (result.status === 'fulfilled' && result.value) {
+          prepared.push(result.value);
+        }
+        // Rejected: prepareLoadCandidate already transitioned to error
+      }
+    }
+
+    if (!toLoad.some(plugin => this.inflightLoads.get(plugin.id) === owner)) {
+      return;
+    }
+
+    // Cancelled participants must not publish after another operation took over.
+    let ownedCount = 0;
+    for (const candidate of prepared) {
+      if (this.inflightLoads.get(candidate.pluginId) === owner) {
+        prepared[ownedCount++] = candidate;
+      }
+    }
+
+    prepared.length = ownedCount;
+
+    // Pass 2a: Register all plugin-defined extension points first
+    for (const p of prepared) {
+      if (this.inflightLoads.get(p.pluginId) !== owner) {
+        continue;
+      }
+
+      this.registerExtensionPoints(p.pluginId, p.extensionPoints);
+      this.definedExtensionPointIdsByPlugin.set(p.pluginId, p.extensionPoints.map((ep) => ep.id));
+    }
+
+    // Pass 2b: Apply all contributions/routes
+    let readyCount = 0;
+    let failedCount = 0;
+    for (const p of prepared) {
+      if (this.inflightLoads.get(p.pluginId) !== owner) {
+        continue;
+      }
+
+      try {
+        this.applyContributions(p.pluginId, p.normalizedContributions);
+        this.normalizedContributionsByPlugin.set(p.pluginId, p.normalizedContributions);
+        this.registrations.set(p.pluginId, p.registrations);
+
+        this.transition(p.pluginId, 'ready', {
+          pluginWindow: p.pluginWindow,
+          loadedAt: Date.now(),
+          retryCount: 0,
+          isDev: p.isDev,
+          devPort: p.devPort,
+          error: null,
+          validationErrors: [],
+          moduleHash: p.moduleHash,
+          declaredDependencies: p.declaredDependencies,
+        });
+
+        readyCount++;
+
+        // Emit deprecation warnings for legacy exports
+        this.emitLegacyDeprecationWarnings(p.pluginId, p.validated);
+      } catch (err) {
+        failedCount++;
+        this.handleLoadError(p.pluginId, err, 0);
+      }
+    }
+
+    // Replay pending contributions only for EPs from plugins that reached ready.
+    const allNewEpIds: string[] = [];
+    for (const p of prepared) {
+      const ps = this.state.get(p.pluginId);
+      if (ps?.phase === 'ready') {
+        allNewEpIds.push(...p.extensionPoints.map((ep) => ep.id));
+      }
+    }
+
+    if (allNewEpIds.length > 0) {
+      this.replayContributionsForExtensionPoints(allNewEpIds);
+    }
+
+    // F1: Register dependency metadata and run diagnostics
+    for (const p of prepared) {
+      if (p.declaredDependencies) {
+        this.dependencyAnalyzer.addPlugin(p.pluginId, p.declaredDependencies);
+      }
+    }
+
+    // Check for cycles after all plugins loaded
+    const cycles = this.dependencyAnalyzer.detectCycles();
+    if (cycles.length > 0) {
+      this.deps.log.warn(
+        `Dependency cycle detected among plugins: ${cycles.map((c) => c.join(' -> ')).join('; ')}`,
+        { cycles },
+      );
+    }
+
+    // Emit missing dependency advisories
+    for (const p of prepared) {
+      if (p.declaredDependencies) {
+        const warnings = this.getDependencyWarnings(p.pluginId);
+        for (const w of warnings) {
+          this.deps.log.warn(w, { pluginId: p.pluginId });
+        }
+      }
+    }
+
+    // Count plugins that failed during prepare (not in prepared array)
+    failedCount += toLoad.length - prepared.length;
+
+    this.deps.log.debug(
+      `loadAll complete: ${readyCount} ready, ${failedCount} failed (${toLoad.length} total)`,
+      { readyCount, failedCount, total: toLoad.length },
+    );
+
+    this.bumpRouteVersion();
+  }
+
   // ── Private: Core Load Logic ────────────────────────────────────
 
-  private async doLoad(pluginId: string, opts: PluginLoadOpts): Promise<void> {
+  private async refreshCommittedPlugin(pluginId: string): Promise<void> {
+    const generation = this.loadGeneration.get(pluginId);
+    const inflight = this.inflightLoads.get(pluginId);
+    if (inflight) {
+      await inflight;
+    }
+
+    if (this.eventCleanups.length === 0 || this.loadGeneration.get(pluginId) !== generation) {
+      return;
+    }
+
+    const current = this.state.get(pluginId);
+    if (current?.phase === 'ready') {
+      await this.reload(pluginId);
+      return;
+    }
+
+    if (current?.phase === 'error' || current?.phase === 'retrying') {
+      const unloading = this.unload(pluginId);
+      const unloadGeneration = this.loadGeneration.get(pluginId);
+      await unloading;
+      if (this.eventCleanups.length === 0 || this.loadGeneration.get(pluginId) !== unloadGeneration) {
+        return;
+      }
+    }
+
+    await this.load(pluginId);
+  }
+
+  private async doLoad(pluginId: string, opts?: PluginLoadOpts): Promise<void> {
     // Ensure or create initial state
     const current = this.state.get(pluginId);
     if (!current) {
       this.state.set(pluginId, createDefaultPluginState(pluginId, {
-        isDev: opts.dev ?? false,
-        devPort: opts.devPort ?? null,
+        isDev: opts?.dev ?? false,
+        devPort: opts?.devPort ?? null,
       }));
     }
 
@@ -824,17 +937,28 @@ export class PluginService {
     const generation = this.bumpLoadGeneration(pluginId);
 
     try {
+      const resolved = opts ?? await this.deps.getPluginDescriptor(pluginId);
+      if (!this.isCurrentGeneration(pluginId, generation)) {
+        return;
+      }
+
       this.deps.ensureBuiltinExtensionPoints();
 
-      if (opts.dev) {
+      if (resolved.dev) {
         await this.deps.ensureDevSharedDeps();
       }
 
+      if (!this.isCurrentGeneration(pluginId, generation)) {
+        return;
+      }
+
+      this.recordAttemptedSource(pluginId, resolved);
+
       const rawModule = await this.withImportTimeout(pluginId, this.deps.importPlugin({
         pluginId,
-        dev: opts.dev,
-        devPort: opts.devPort,
-        moduleHash: opts.moduleHash,
+        dev: resolved.dev,
+        devPort: resolved.devPort,
+        moduleHash: resolved.moduleHash,
       }));
 
       // Stale check
@@ -892,11 +1016,11 @@ export class PluginService {
         pluginWindow: validated.plugin,
         loadedAt: Date.now(),
         retryCount: 0,
-        isDev: opts.dev ?? false,
-        devPort: opts.devPort ?? null,
+        isDev: resolved.dev ?? false,
+        devPort: resolved.devPort ?? null,
         error: null,
         validationErrors: [],
-        moduleHash: opts.moduleHash ?? null,
+        moduleHash: resolved.moduleHash ?? null,
         declaredDependencies,
       });
 
@@ -930,18 +1054,39 @@ export class PluginService {
     try {
       this.deps.ensureBuiltinExtensionPoints();
 
-      const isDev = opts?.dev ?? current.isDev;
+      const resolved = opts === undefined
+        ? await this.deps.getPluginDescriptor(pluginId)
+        : {
+          dev: opts.dev ?? current.isDev,
+          devPort: opts.devPort ?? current.devPort ?? undefined,
+          moduleHash: opts.moduleHash,
+        };
+      if (!this.isCurrentGeneration(pluginId, generation)) {
+        return;
+      }
+
+      const isDev = resolved.dev ?? false;
       if (isDev) {
         await this.deps.ensureDevSharedDeps();
       }
 
-      await this.deps.clearPlugin({ pluginId, dev: isDev });
+      if (!this.isCurrentGeneration(pluginId, generation)) {
+        return;
+      }
+
+      await this.deps.clearPlugin({ pluginId, dev: current.isDev });
+
+      if (!this.isCurrentGeneration(pluginId, generation)) {
+        return;
+      }
+
+      this.recordAttemptedSource(pluginId, resolved);
 
       const rawModule = await this.withImportTimeout(pluginId, this.deps.importPlugin({
         pluginId,
         dev: isDev,
-        devPort: opts?.devPort ?? current.devPort ?? undefined,
-        moduleHash: opts?.moduleHash,
+        devPort: resolved.devPort,
+        moduleHash: resolved.moduleHash,
       }));
 
       if (!this.isCurrentGeneration(pluginId, generation)) {
@@ -1008,10 +1153,10 @@ export class PluginService {
         loadedAt: Date.now(),
         retryCount: 0,
         isDev,
-        devPort: opts?.devPort ?? current.devPort,
+        devPort: resolved.devPort ?? null,
         error: null,
         validationErrors: [],
-        moduleHash: opts?.moduleHash ?? null,
+        moduleHash: resolved.moduleHash ?? null,
         declaredDependencies,
       });
 
@@ -1041,10 +1186,25 @@ export class PluginService {
 
   // ── Private: Load helpers ───────────────────────────────────────
 
+  private recordAttemptedSource(pluginId: string, source: PluginLoadOpts): void {
+    const current = this.state.get(pluginId)!;
+    const isDev = source.dev ?? false;
+    const devPort = isDev ? source.devPort ?? null : null;
+    const moduleHash = source.moduleHash ?? null;
+    if (current.isDev === isDev && current.devPort === devPort && current.moduleHash === moduleHash) {
+      return;
+    }
+
+    // Failure must retain the attempted loader mode, not the last live window's.
+    // The following ready/error transition publishes the updated snapshot.
+    this.state.set(pluginId, { ...current, isDev, devPort, moduleHash });
+  }
+
   private async prepareLoadCandidate(
     pluginId: string,
     opts: PluginLoadOpts | PluginDescriptor,
-  ): Promise<PreparedPluginLoad> {
+    owner: Promise<void>,
+  ): Promise<PreparedPluginLoad | undefined> {
     const isDev = 'dev' in opts ? (opts.dev ?? false) : false;
     const devPort = 'devPort' in opts ? (opts.devPort ?? null) : null;
     const moduleHash = 'moduleHash' in opts ? (opts.moduleHash ?? null) : null;
@@ -1063,6 +1223,12 @@ export class PluginService {
       if (isDev) {
         await this.deps.ensureDevSharedDeps();
       }
+
+      if (this.inflightLoads.get(pluginId) !== owner) {
+        return;
+      }
+
+      this.recordAttemptedSource(pluginId, opts);
 
       const rawModule = await this.withImportTimeout(pluginId, this.deps.importPlugin({
         pluginId,
@@ -1091,7 +1257,10 @@ export class PluginService {
         declaredDependencies,
       };
     } catch (err) {
-      this.handleLoadError(pluginId, err, 0);
+      if (this.inflightLoads.get(pluginId) === owner) {
+        this.handleLoadError(pluginId, err, 0);
+      }
+
       throw err; // re-throw so Promise.allSettled captures it
     }
   }

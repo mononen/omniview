@@ -1,5 +1,17 @@
 packages:
   - "packages/*"
-  - "plugins/**"
-  - "!plugins/kubernetes/**"
   - "e2e"
+linkWorkspacePackages: false
+strictPeerDependencies: true
+pmOnFail: error
+minimumReleaseAge: 1440
+minimumReleaseAgeExclude:
+  - '@omniviewdev/*'
+overrides:
+  '@types/react': ^19.0.0
+  '@types/react-dom': ^19.0.0
+allowBuilds:
+  esbuild: true
+  protobufjs: true
+patchedDependencies:
+  '@wailsio/runtime@3.0.0-beta.34': patches/@wailsio__runtime@3.0.0-beta.34.patch

@@ -40,18 +40,18 @@ type ResourceProvider interface {
 	StopConnectionWatch(ctx context.Context, connectionID string) error
 	HasWatch(ctx context.Context, connectionID string) bool
 	GetWatchState(ctx context.Context, connectionID string) (*resource.WatchConnectionSummary, error)
-	ListenForEvents(ctx context.Context, sink resource.WatchEventSink) error
+	ListenForEvents(ctx context.Context, sink resource.WatchEventSink, onReady func() error) error
 	EnsureResourceWatch(ctx context.Context, connectionID, resourceKey string) error
 	StopResourceWatch(ctx context.Context, connectionID, resourceKey string) error
 	RestartResourceWatch(ctx context.Context, connectionID, resourceKey string) error
 	IsResourceWatchRunning(ctx context.Context, connectionID, resourceKey string) (bool, error)
 
 	// Type metadata
-	GetResourceGroups(ctx context.Context, connectionID string) map[string]resource.ResourceGroup
+	GetResourceGroups(ctx context.Context, connectionID string) (map[string]resource.ResourceGroup, error)
 	GetResourceGroup(ctx context.Context, id string) (resource.ResourceGroup, error)
-	GetResourceTypes(ctx context.Context, connectionID string) map[string]resource.ResourceMeta
+	GetResourceTypes(ctx context.Context, connectionID string) (map[string]resource.ResourceMeta, error)
 	GetResourceType(ctx context.Context, id string) (*resource.ResourceMeta, error)
-	HasResourceType(ctx context.Context, id string) bool
+	HasResourceType(ctx context.Context, id string) (bool, error)
 	GetResourceDefinition(ctx context.Context, id string) (resource.ResourceDefinition, error)
 	GetResourceCapabilities(ctx context.Context, resourceKey string) (*resource.ResourceCapabilities, error)
 	GetResourceSchema(ctx context.Context, connectionID, resourceKey string) (json.RawMessage, error)

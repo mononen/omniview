@@ -6,29 +6,24 @@ test.describe('Navigation', () => {
     await expect(shell(appPage).rail).toBeVisible();
   });
 
-  test('the home page shows the welcome screen', async ({ appPage }) => {
-    await expect(shell(appPage).main.getByText('Omniview', { exact: true })).toBeVisible();
-  });
-
   test('header buttons route to settings, plugins and back home', async ({ appPage }) => {
     const header = shell(appPage).header;
 
-    await header.getByRole('button', { name: 'settings' }).click();
+    await header.getByRole('button', { name: 'settings', exact: true }).click();
     await expect(appPage).toHaveURL(/#\/settings$/);
     await expect(appPage.getByRole('navigation').getByText('Appearance', { exact: true })).toBeVisible();
 
     await header.getByRole('button', { name: 'plugins' }).click();
     await expect(appPage).toHaveURL(/#\/plugins$/);
-    await expect(appPage.getByText('Installed', { exact: true })).toBeVisible();
+    await expect(appPage.getByRole('button', { name: /^Installed\b/ })).toBeVisible();
 
     await header.getByRole('button', { name: 'home' }).click();
     await expect(appPage).toHaveURL(/#\/$/);
-    await expect(shell(appPage).main.getByText('Omniview', { exact: true })).toBeVisible();
   });
 
   test('browser back and forward move between pages', async ({ appPage }) => {
     const header = shell(appPage).header;
-    await header.getByRole('button', { name: 'settings' }).click();
+    await header.getByRole('button', { name: 'settings', exact: true }).click();
     await header.getByRole('button', { name: 'plugins' }).click();
 
     await appPage.goBack();
@@ -51,8 +46,12 @@ test.describe('Navigation', () => {
 
       await page.goto(`/#${path}`);
       await expect(shell(page).root).toBeVisible();
-      // Let lazy queries settle before judging.
-      await page.waitForLoadState('networkidle');
+      const ready = path === '/'
+        ? shell(page).main.getByRole('button', { name: 'Edit Layout' })
+        : path === '/settings'
+          ? page.getByRole('navigation').getByText('Appearance', { exact: true })
+          : page.getByRole('button', { name: /^Installed\b/ });
+      await expect(ready).toBeVisible();
 
       expect(errors).toEqual([]);
       await expectPageDoesNotScroll(page);

@@ -2,6 +2,15 @@ export * from './bindings/github.com/omniviewdev/omniview/models';
 export * from './bindings/github.com/omniviewdev/plugin-sdk/pkg/types/models';
 export * from './bindings/github.com/omniviewdev/plugin-sdk/pkg/config/models';
 export * from './bindings/github.com/omniviewdev/plugin-sdk/pkg/v1/resource/models';
+// graph: RelationshipType is already exported from the SDK resource models.
+export {
+  DependencyNode,
+  DependencyTree,
+  GraphEdge,
+  GraphNode,
+  Subgraph,
+  SubgraphNode,
+} from './bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/resource/graph/models';
 // Shadows the generated WatchState with the alias-carrying one.
 export { WatchState } from './compat/resource';
 
@@ -55,8 +64,8 @@ export * from './bindings/github.com/omniviewdev/plugin-sdk/settings/models';
 // devserver: re-export everything except LogEntry (collides with pluginlog)
 export {
   BuildError,
-  DevInfoFile,
   DevProcessStatus,
+  LifecycleStage,
   DevServerErrorPayload,
   DevServerMode,
   DevServerState,

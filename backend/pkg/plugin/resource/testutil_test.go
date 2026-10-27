@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/omniviewdev/omniview/backend/pkg/invocation"
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/resource/graph"
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/resource/indexer"
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/resource/registry"
@@ -175,16 +176,16 @@ type mockProvider struct {
 	StopConnectionWatchFunc     func(ctx context.Context, connectionID string) error
 	HasWatchFunc                func(ctx context.Context, connectionID string) bool
 	GetWatchStateFunc           func(ctx context.Context, connectionID string) (*resource.WatchConnectionSummary, error)
-	ListenForEventsFunc         func(ctx context.Context, sink resource.WatchEventSink) error
+	ListenForEventsFunc         func(ctx context.Context, sink resource.WatchEventSink, onReady func() error) error
 	EnsureResourceWatchFunc     func(ctx context.Context, connectionID, resourceKey string) error
 	StopResourceWatchFunc       func(ctx context.Context, connectionID, resourceKey string) error
 	RestartResourceWatchFunc    func(ctx context.Context, connectionID, resourceKey string) error
 	IsResourceWatchRunningFunc  func(ctx context.Context, connectionID, resourceKey string) (bool, error)
-	GetResourceGroupsFunc       func(ctx context.Context, connectionID string) map[string]resource.ResourceGroup
+	GetResourceGroupsFunc       func(ctx context.Context, connectionID string) (map[string]resource.ResourceGroup, error)
 	GetResourceGroupFunc        func(ctx context.Context, id string) (resource.ResourceGroup, error)
-	GetResourceTypesFunc        func(ctx context.Context, connectionID string) map[string]resource.ResourceMeta
+	GetResourceTypesFunc        func(ctx context.Context, connectionID string) (map[string]resource.ResourceMeta, error)
 	GetResourceTypeFunc         func(ctx context.Context, id string) (*resource.ResourceMeta, error)
-	HasResourceTypeFunc         func(ctx context.Context, id string) bool
+	HasResourceTypeFunc         func(ctx context.Context, id string) (bool, error)
 	GetResourceDefinitionFunc   func(ctx context.Context, id string) (resource.ResourceDefinition, error)
 	GetResourceCapabilitiesFunc func(ctx context.Context, resourceKey string) (*resource.ResourceCapabilities, error)
 	GetResourceSchemaFunc       func(ctx context.Context, connectionID, resourceKey string) (json.RawMessage, error)
@@ -378,9 +379,14 @@ func (m *mockProvider) GetWatchState(
 	return nil, nil
 }
 
-func (m *mockProvider) ListenForEvents(ctx context.Context, sink resource.WatchEventSink) error {
+func (m *mockProvider) ListenForEvents(ctx context.Context, sink resource.WatchEventSink, onReady func() error) error {
 	if m.ListenForEventsFunc != nil {
-		return m.ListenForEventsFunc(ctx, sink)
+		return m.ListenForEventsFunc(ctx, sink, onReady)
+	}
+	if onReady != nil {
+		if err := onReady(); err != nil {
+			return err
+		}
 	}
 	<-ctx.Done()
 	return nil
@@ -414,11 +420,11 @@ func (m *mockProvider) IsResourceWatchRunning(ctx context.Context, connectionID,
 	return false, nil
 }
 
-func (m *mockProvider) GetResourceGroups(ctx context.Context, connectionID string) map[string]resource.ResourceGroup {
+func (m *mockProvider) GetResourceGroups(ctx context.Context, connectionID string) (map[string]resource.ResourceGroup, error) {
 	if m.GetResourceGroupsFunc != nil {
 		return m.GetResourceGroupsFunc(ctx, connectionID)
 	}
-	return nil
+	return nil, nil
 }
 
 func (m *mockProvider) GetResourceGroup(ctx context.Context, id string) (resource.ResourceGroup, error) {
@@ -428,11 +434,11 @@ func (m *mockProvider) GetResourceGroup(ctx context.Context, id string) (resourc
 	return resource.ResourceGroup{}, nil
 }
 
-func (m *mockProvider) GetResourceTypes(ctx context.Context, connectionID string) map[string]resource.ResourceMeta {
+func (m *mockProvider) GetResourceTypes(ctx context.Context, connectionID string) (map[string]resource.ResourceMeta, error) {
 	if m.GetResourceTypesFunc != nil {
 		return m.GetResourceTypesFunc(ctx, connectionID)
 	}
-	return nil
+	return nil, nil
 }
 
 func (m *mockProvider) GetResourceType(ctx context.Context, id string) (*resource.ResourceMeta, error) {
@@ -442,11 +448,11 @@ func (m *mockProvider) GetResourceType(ctx context.Context, id string) (*resourc
 	return nil, nil
 }
 
-func (m *mockProvider) HasResourceType(ctx context.Context, id string) bool {
+func (m *mockProvider) HasResourceType(ctx context.Context, id string) (bool, error) {
 	if m.HasResourceTypeFunc != nil {
 		return m.HasResourceTypeFunc(ctx, id)
 	}
-	return false
+	return false, nil
 }
 
 func (m *mockProvider) GetResourceDefinition(ctx context.Context, id string) (resource.ResourceDefinition, error) {
@@ -682,12 +688,16 @@ func newTestControllerWithEmitter(t *testing.T) (*controller, *recordingEmitter)
 		connections:         make(map[string][]types.Connection),
 		autoConnectAttempts: make(map[string]string),
 		subs:                newSubscriptionManager(),
+		actions:             newActionRegistry(),
 		emitter:             emitter,
 		registryStore:       store,
 		dispatcher:          disp,
 		graph:               g,
 		pluginStoreFn:       svc.PluginStore,
+		watchAfterFunc:      func(d time.Duration, fn func()) actionTimer { return time.AfterFunc(d, fn) },
 	}
+	ctrl.actions.emit = func(id string, snapshot ActionSnapshot) { emitter.Emit("action/stream/"+id, snapshot) }
+	t.Cleanup(ctrl.actions.stopAll)
 	return ctrl, emitter
 }
 
@@ -710,4 +720,12 @@ func registerMockPlugin(ctrl *controller, pluginID string, provider ResourceProv
 		ctrl.connections[pluginID] = []types.Connection{}
 	}
 	ctrl.connsMu.Unlock()
+}
+
+func testInvocationContext() context.Context { return invocation.HostContext(context.Background()) }
+
+func actionCount(registry *actionRegistry) int {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	return len(registry.entries) + len(registry.pending)
 }

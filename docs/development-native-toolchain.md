@@ -1,6 +1,6 @@
 # Isolated native WebView toolchain
 
-Omniview uses unmodified Go/native Wails `v3.0.0-beta.34.0.20261022002616-a90f7e7f50bf`. Native isolation uses application identity and stock platform options; cleanup and workspace policy belong to Omniview. The genuine npm `@wailsio/runtime` remains exactly `3.0.0-beta.34`, with the explicit checked-in dependency patch described below; no framework fork or patched Go-source build path is used.
+Omniview uses unmodified Go/native Wails `v3.0.0`. Native isolation uses application identity and stock platform options; cleanup and workspace policy belong to Omniview. The genuine npm `@wailsio/runtime` remains exactly `3.0.0`, with the explicit checked-in dependency patch described below; no framework fork or patched Go-source build path is used.
 
 Use Task entry points, or prepare an effective host module when selecting a local SDK:
 
@@ -188,7 +188,7 @@ alone.
 
 ## Declared npm Call settlement patch
 
-`pnpm-workspace.yaml` declares `patches/@wailsio__runtime@3.0.0-beta.34.patch` for the exact published npm package. The patch makes its Call response callbacks settle only their own still-registered resolver record. Cancellation removes that ownership while still sending the existing native CancelCall request; a later response cannot reject an already-canceled promise or touch a newly reused call ID. Ordinary errors and successful void results remain unchanged. The generic CancellablePromise late-rejection policy is not weakened.
+`pnpm-workspace.yaml` declares `patches/@wailsio__runtime@3.0.0.patch` for the exact published npm package. The patch makes its Call response callbacks settle only their own still-registered resolver record. Cancellation removes that ownership while still sending the existing native CancelCall request; a later response cannot reject an already-canceled promise or touch a newly reused call ID. Ordinary errors and successful void results remain unchanged. The generic CancellablePromise late-rejection policy is not weakened.
 
 Native pnpm 12.14.0 generates and verifies the patch hash in `pnpm-lock.yaml`. Managed composition rebases and fingerprints the declared patch through its existing policy/source-hash path; never edit installed packages, caches or generated receipts. The post-install `node --test scripts/wails-call.test.mjs` regression imports the actual resolved package and uses strict isolated processes, not a Call clone or global rejection filter. Keep the patch until a genuinely corrected upstream release is selected and verified.
 
@@ -261,11 +261,11 @@ These are mechanism probes, not proof of every full-host lifecycle or platform. 
 
 ### Future upstream work
 
-No Wails-native extension is required for this workspace model. If a new native requirement genuinely exceeds stock capabilities, first demonstrate that gap independently of Omniview policy. Wails requires a [proposal-only WEP draft PR](https://github.com/wailsapp/wails/blob/a90f7e7f50bf3d7db5552fcaf9eeec6fd3d4e626/v3/wep/README.md), at least two weeks of feedback, and recorded acceptance before an implementation PR. Follow its [contribution guidance](https://github.com/wailsapp/wails/blob/a90f7e7f50bf3d7db5552fcaf9eeec6fd3d4e626/CONTRIBUTING.md); do not add native framework patches to implement workspace policy. The declared npm Call bug fix above does not add a native workspace-policy API.
+No Wails-native extension is required for this workspace model. If a new native requirement genuinely exceeds stock capabilities, first demonstrate that gap independently of Omniview policy. Wails requires a [proposal-only WEP draft PR](https://github.com/wailsapp/wails/blob/v3.0.0/v3/wep/README.md), at least two weeks of feedback, and recorded acceptance before an implementation PR. Follow its [contribution guidance](https://github.com/wailsapp/wails/blob/v3.0.0/CONTRIBUTING.md); do not add native framework patches to implement workspace policy. The declared npm Call bug fix above does not add a native workspace-policy API.
 
 ### Native API references
 
 - Apple: [default persistent store](https://developer.apple.com/documentation/webkit/wkwebsitedatastore/default()) and [public website-data management](https://developer.apple.com/documentation/webkit/wkwebsitedatastore).
 - GLib: startup-selected [data](https://docs.gtk.org/glib/func.get_user_data_dir.html) and [cache](https://docs.gtk.org/glib/func.get_user_cache_dir.html) roots.
-- Wails: [server routing](https://github.com/wailsapp/wails/blob/a90f7e7f50bf3d7db5552fcaf9eeec6fd3d4e626/v3/pkg/application/application_server.go) and [stock options](https://github.com/wailsapp/wails/blob/a90f7e7f50bf3d7db5552fcaf9eeec6fd3d4e626/v3/pkg/application/application_options.go).
+- Wails: [server routing](https://github.com/wailsapp/wails/blob/v3.0.0/v3/pkg/application/application_server.go) and [stock options](https://github.com/wailsapp/wails/blob/v3.0.0/v3/pkg/application/application_options.go).
 

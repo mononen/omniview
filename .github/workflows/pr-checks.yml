@@ -8,18 +8,43 @@ concurrency:
   group: pr-checks-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  packages: read
+  pull-requests: read
+
 env:
   GO_VERSION: "1.26"
   NODE_VERSION: "24"
   GOWORK: "off"
 
 jobs:
+  release-packaging-checks:
+    name: Release packaging contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Check Homebrew cask publication
+        run: node --test build/homebrew/update-cask.test.mjs
+      - name: Check macOS packaging shell syntax
+        run: |
+          bash -n build/darwin/build-universal.sh
+          bash -n build/darwin/verify-release-package.sh
+
   go-checks:
     name: Go checks
     runs-on: ${{ vars.SELF_HOSTED_LINUX_RUNNER != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.SELF_HOSTED_LINUX_RUNNER) || 'ubuntu-24.04' }}
     outputs:
       c02_corpus_name: ${{ steps.c02-corpus.outputs.corpus_name }}
     steps:
+      # The runner creates this mount as UID 1001; Git must see the same owner
+      # as the container user after checkout's temporary HOME goes away.
+      - name: Match checkout directory ownership to container user
+        run: chown "$(id -u):$(id -g)" "$PWD"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -129,6 +154,10 @@ jobs:
     name: Bindings freshness
     runs-on: ${{ vars.SELF_HOSTED_LINUX_RUNNER != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.SELF_HOSTED_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
+      # Keep Git ownership checks enabled instead of adding safe.directory trust.
+      - name: Match checkout directory ownership to container user
+        run: chown "$(id -u):$(id -g)" "$PWD"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4

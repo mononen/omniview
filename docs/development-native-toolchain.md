@@ -19,24 +19,22 @@ Bindings remain `task bindings SDK_SOURCE="$SDK_SOURCE"`. Tasks select the Wails
 
 ## Canonical Linux E2E prerequisites and payloads
 
-The Ubuntu24.04 reusable runner has one Linux provisioning owner:
-`e2e/scripts/browser-dependencies.mjs`, called inside the canonical invocation.
-It verifies restored `.deb` archives against freshly authenticated APT indexes,
-combines the existing GTK4/WebKit6/Wayland/build recipe with the **actual pinned
-Playwright** missing-package simulation, and installs that union in one APT
-transaction. This preserves Chromium's libraries, X packages and fonts without
-copying an upstream package/version list. A second simulation must prove all
-browser dependencies installed; an unsupported-platform warning, unexpected
-output/status or package-manager error fails closed. The subsequent Chromium
-installation downloads/reuses browser binaries only, never another APT pass.
-Root Linux invokes `apt-get` directly; other UIDs use `sudo` for both index
-refresh and installation, so a root runner does not require `sudo`.
+Linux native CI jobs run on fresh GitHub-hosted Ubuntu 24.04 runners inside
+`ghcr.io/omniviewdev/omniview-ci:ubuntu24-v1`. The image contains GTK4, WebKit6,
+Wayland development headers, build tools, and the pinned Playwright Chromium OS
+dependencies. Jobs pull installed filesystem layers rather than downloading,
+validating and unpacking APT archives on each run.
 
-The workflow starts the inclusive preparation clock before Node/Go setup and
-index refresh. Restore/setup time and canonical dependency/browser phases count
-toward600000ms; the default subprocess bound remains180000ms. A cold archive miss
-can still fail either bound: caching is not a promise that external downloads
-complete in time, and failures are not retried.
+`e2e/scripts/browser-dependencies.mjs` verifies the preinstalled native libraries
+and the actual pinned Playwright dependency simulation. CI fails if the image
+is incomplete; it does not silently install packages or retry. Local Linux runs
+retain authenticated APT installation. Chromium binaries remain a separate,
+exact-version payload cache, not part of the system image.
+
+The inclusive 1800000ms (30-minute) preparation clock covers Node/Go setup, restored
+payloads and canonical preparation. Image pulling happens during job startup
+before this clock; compare total job duration, not only preparation duration.
+The default subprocess bound remains 180000ms.
 
 Initialize a fresh explicit native-tool cache with `--init-tool-cache` before
 restoring payloads. The v2 container adds private `playwright-browsers` alongside
@@ -46,49 +44,146 @@ receipts. `PLAYWRIGHT_BROWSERS_PATH` is derived from the validated owner, not an
 ambient override; runs without an explicit cache use their private preparation
 HOME. Chromium keys bind OS/architecture, Ubuntu24 and the committed package pin
 and lockfile, with no fallback browser key. Existing default-main scope trust
-remains unchanged. CI preserves the established Go/pnpm payload paths while
-creating fresh v2 ownership; ownership metadata is never restored.
+remains unchanged. CI creates a fresh private parent beneath the container's
+canonical `$RUNNER_TEMP`, then initializes v2 ownership before payload restore.
+The mount itself keeps its runner ownership. This container-path cutover changes
+Actions' path-derived cache version and requires one cold population; ownership
+metadata is never restored.
 
 Trusted-main `--cache-only` now prepares browser binaries too, but starts no
 application profiles/tests and never reports application acceptance. It skips
 preparation only when exact pnpm, Go **and Chromium** main-scope lookups all hit.
 Acceptance still requires the one genuine application invocation and its
-fail-closed final gate. Darwin boundary/smoke checks do not establish Linux APT
-behavior: retain actual Ubuntu cold-populate, warm-skip and subsequent-PR restore
-evidence separately from application case/drain/canonical-cleanup receipts.
+fail-closed final gate. Keep Linux image readiness, cache reuse and application
+case/drain/canonical-cleanup evidence separate.
 
-## Native CI prerequisite archives
+## Application E2E feedback in GitHub Actions
 
-`PR Checks / Go checks`, `PR Checks / Bindings freshness` and the Linux
-`PR Validation / build-artifacts` entry use Ubuntu24.04, matching the existing
-E2E archive producer and `/tmp/omniview-e2e-apt/*.deb` physical payload path.
-The PR Linux baseline is explicit; macOS/Windows and release workflows are unchanged.
-A fresh authenticated index update
-precedes lookup. The exact key includes OS/architecture, the producer's existing
-recipe inputs and current signed-index digest; its sole fallback keeps the same
-OS/architecture/recipe prefix across index-only rotations. Existing Actions cache
-scope visibility is unchanged; these consumers publish no APT archives.
+`PR Validation` calls `.github/workflows/e2e-runner.yml` for the canonical
+application suite. The stable `e2e-tests` check accepts only the reusable job's
+success, including an explicitly proven prose-only skip. Browser results alone
+do not prove canonical preparation, acceptance and cleanup succeeded.
 
-Each job's opt-in `verify-apt-archives.mjs DIRECTORY --prepare` runs before
-creating APT's partial directory. It requires a canonical, current-UID-owned,
-non-public-writable, archive-only candidate and examines the **entire** bundle.
-Every indexed payload must still match authenticated package/version/architecture,
-size and SHA256. Only an absent version of a known package/architecture can retain
-the whole candidate in a private sibling and create a fresh empty active
-directory; none of those candidate bytes or ownership metadata is accepted.
-Unknown entries/packages/architectures, symlinks, malformed metadata and indexed
-tampering remain fatal. Nothing is deleted or repaired. The strict default
-verifier never performs this preparation.
+Playwright uses its GitHub reporter in Actions for failure annotations on the
+check and source locations, alongside terminal output, HTML and case timings.
+Annotations require Playwright to run; checkout, source validation or preparation
+errors remain in their own step logs. No PR comments or write permissions are
+needed. The always-run **Summarize canonical application feedback** step separates
+proven skips, preparation/not-reached failures, canonical failures without a
+report, completed operations and cancellation. A report can exist even when the
+canonical operation fails afterward. A missing report is not evidence that tests
+passed or that application assertions ran.
 
-APT then owns a freshly created partial directory and performs the unchanged real
-native installation once. Existing E2E archive publication and trusted-main's
-three-native-key-hit skip are unchanged: an actual package-version change can
-require cold fetching until the next genuine producer, and not every index
-rotation triggers main population. A lookup hit alone proves no runtime reuse.
-Darwin filesystem/metadata fixtures and workflow lint are not Ubuntu proof;
-retain actual matched cache identity/bytes, verification count, APT download and
-installation timing, and successful native build/vet/test, bindings freshness or PR
-artifact build/upload evidence separately.
+Actual application runs attempt both uploads on success, failure and cancellation:
+
+| Artifact | Uploaded directory | Contents |
+| --- | --- | --- |
+| `playwright-report` | `e2e/playwright-report/` | HTML report with `index.html` at the ZIP root and its attachment data |
+| `playwright-test-results` | `e2e/test-results/` | Raw retained test evidence, including failure screenshots, videos and redacted browser errors when produced |
+
+Both artifacts retain the existing seven-day lifetime. The job summary links
+directly to each uploaded artifact; absent files produce no artifact. HTML uploads
+require `index.html`; selection or invocation metadata alone does not publish an
+HTML artifact. Cache-only main runs produce neither application feedback summaries
+nor these uploads.
+Only these browser-output directories are uploaded, never private profiles,
+ownership receipts or general temporary logs. **Traces remain disabled**:
+authenticated Vite HMR URLs can contain tokens. Screenshots, videos and reports
+can still contain visible application data; keep tests on their isolated fixtures
+and treat downloaded evidence as sensitive.
+
+GitHub artifacts are ZIP downloads, not hosted HTML. Download `playwright-report`
+from the summary or run's Artifacts section and extract the entire ZIP, including
+`data/`, into `./playwright-report` at the checkout root. With the pinned E2E
+dependencies already installed, serve it from the checkout root:
+
+```sh
+pnpm --dir e2e exec playwright show-report ../playwright-report
+```
+
+Open a failed test in the report to inspect its attachments. Download the raw
+evidence artifact separately when individual files are needed. Do not open only
+`index.html` through `file://`, move attachment data away, or expect the artifact
+link to serve an interactive website.
+
+For a locally generated report, use `pnpm --dir e2e report`. To run the canonical
+suite locally, explicitly select the companion sources and independently reviewed
+SDK commit, then invoke the runner rather than bypassing preparation:
+
+```sh
+SDK_SOURCE=/absolute/path/to/plugin-sdk \
+UI_SOURCE=/absolute/path/to/ui \
+KUBERNETES_SOURCE=/absolute/path/to/omniview-plugin-kubernetes \
+REVIEWED_SDK_REVISION='<independently-reviewed-full-sdk-commit>' \
+node e2e/scripts/run.mjs --full
+```
+
+Local prerequisites and source ownership rules still apply. To run conservative
+selection instead, use `--changed --base <base-commit>` in place of `--full`.
+No HTML report is expected for a proven skip or failure before Playwright.
+Cancellation, an inclusive runner deadline, reporter failure or hard watchdog
+termination can leave partial evidence or no finalized report. A hard runner
+termination can also prevent the always-run uploads and summary entirely; inspect
+the check status and logs when feedback is unavailable. Expired/deleted artifacts
+cannot be recovered through their former links.
+
+This feedback applies only to the canonical application runner. `PR Checks`
+separately runs Go checks, bindings checks and UI build/lint/type checks and its
+C02 transport check. `PR Validation` also builds platform artifacts.
+`render-bench.yml` runs render benchmarks and `app-profile.yml` runs whole-app
+profiling with their own result uploads; they are not this application test
+report. Those runners and their reporting conventions are unchanged.
+
+See Playwright's official [reporter documentation](https://playwright.dev/docs/test-reporters)
+for multiple reporters and GitHub annotations, and its [CI guide](https://playwright.dev/docs/ci-intro)
+for downloading and serving reports and handling sensitive evidence.
+
+## CI image maintenance and runner choice
+
+`.github/ci/Dockerfile` owns the system package recipe. `ci-image.yml` rebuilds
+it weekly, on recipe changes to main, and on manual dispatch. Only trusted
+publication jobs can write GHCR; pull requests only build and smoke the image.
+Consumer jobs authenticate with their read-only `GITHUB_TOKEN`; no stored
+registry secret is required. The package must inherit Actions access from this
+repository, including read access for PR jobs. The initial image must be
+published before consumer jobs can start. Public visibility is optional and
+allows anonymous local pulls; GHCR packages are private on first publication.
+
+Container jobs use shell `$GITHUB_WORKSPACE` and `$RUNNER_TEMP`, not the host
+paths from expression contexts. Before root-level checkouts, native jobs align
+the fresh checkout mount's owner with the container user. This retains Git's
+ownership checks and normal VCS stamping without wildcard `safe.directory`
+exceptions or recursive ownership changes.
+Docker's `--init` reaps orphaned compiler/browser children. Without it, the
+runner's keepalive process becomes PID 1 and zombie processes can keep owned
+process groups present after teardown. Do not weaken group-exit assertions.
+
+The versioned `ubuntu24-v1` tag accepts weekly security refreshes. Job setup logs
+record the resolved digest; retain that digest when comparing timings or
+diagnosing image regressions. Change the major image tag for incompatible
+toolchain changes. Update the image's Playwright pin with `e2e/package.json`;
+the publisher checks the versions agree. A failed rebuild leaves the previous
+published image available. Do not cache APT databases or installed system paths.
+The image includes `zstd` so Actions caches use their normal fast compressor
+instead of a gzip fallback. Changing compression also changes the cache version,
+so the first image-backed run may need a cold population.
+
+Standard hosted containers preserve a clean VM boundary without owning runner
+patching, registration, autoscaling, cleanup or idle capacity. Image pulls and
+Go/pnpm linking still cost time; no speedup number is assumed without job data.
+If container pulls become the bottleneck, GitHub's
+[larger-runner custom images](https://docs.github.com/en/actions/how-tos/manage-runners/larger-runners/use-custom-images)
+can preinstall the same recipe in a VM. They require organization setup and
+paid runner/storage capacity.
+
+Self-hosting is an alternative only with disposable, one-job runners created
+from a patched immutable image. Never run public PRs on a persistent runner
+with secrets or access to internal services. GitHub documents the
+[self-hosted runner security risks](https://docs.github.com/en/actions/reference/security/secure-use).
+Use separate trusted image builders and untrusted PR runner pools, deny access
+to cloud metadata and internal networks, and destroy each VM after its job.
+That operational cost is not justified by the supplied package-install failure
+alone.
 
 
 ## Declared npm Call settlement patch

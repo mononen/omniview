@@ -2,6 +2,10 @@
 
 The host-owned CLI manages independent Git worktrees, one pnpm workspace per feature, isolated development profiles and persistent launch supervisors. Commands below replace manual developer-settings dialogs and global links. Runtime/platform acceptance is recorded separately; source implementation is not proof that every native, plugin and HMR combination has passed.
 
+The browser development-status banner stays above the bottom status bar and does
+not intercept input. Notification history, terminal controls, and underlying
+application actions remain usable while development status is visible.
+
 The [workspace roadmap](development-workspaces-roadmap.md) records research decisions, repository routing, ordered parallel work packets, exercised evidence and remaining acceptance gates.
 
 ## Bootstrap the local CLI and sources
@@ -23,6 +27,19 @@ The pnpm12 workspace policy retains 24-hour release-age protection (`minimumRele
 
 Choose source refs that satisfy the actual peer contracts: compare the host's `packages/omniviewdev-runtime/package.json` with the selected UI's `packages/base-ui/package.json`. A checkout can lag an existing compatible release tag. Select compatible released source while preserving feature changes; do not invent a package version or weaken peer validation to make an older source pass.
 
+Host `0.7.3` consumes published `@omniviewdev/base-ui` `~0.7.1` and `@omniviewdev/ai-ui`/`@omniviewdev/editors` `~6.0.1`; the runtime's base-ui peer lower bound is also `0.7.1`. Select UI source refs that satisfy these contracts.
+
+The published UI cohort comes from `omniviewdev/ui` commit
+`11a55a53acb67328f743c512757cabd29135f5fc`. Canonical CI selects that same
+reviewed source through `OMNIVIEW_E2E_UI_REF`; older `0.7.0` UI source cannot
+satisfy the host's updated lower bounds.
+
+Runtime UI preflight checks the host, selected plugin frontends, and linked shared
+packages. Other discovered workspace packages, such as standalone comparison or
+benchmark apps, retain their own dependencies; their private UI libraries do not
+become host-shared dependencies. Selected runtime consumers must still migrate
+legacy UI, MUI, and Emotion dependencies to the supported base-ui contract.
+
 The generated package root is `$COLLECTION/workspaces/<feature>`, above its host/UI/plugin worktrees. Managed native12 commands keep the actual consumer cwd/argv while enforcing this root through `PNPM_CONFIG_WORKSPACE_DIR`. Source configs/lockfiles remain standalone; compatible policies and locked registry resolutions are reconciled explicitly, and conflicts refuse mutation. Do not hand-edit generated root files or run independent plugin installs inside a managed feature.
 
 The host workspace includes its packages and E2E tooling; host TypeScript projects own `ui/` and `packages/`, not plugin repositories under `plugins/`. Each plugin's own project owns its dependencies, aliases and tests. Managed features add only explicitly selected plugin repositories; initializing an unselected submodule must not change host compilation or dependency resolution.
@@ -37,14 +54,14 @@ DEV="$(task --silent dev:cli:build)"
   --source "plugin-sdk=$FIXED_SDK_SOURCE" \
   --source "plugin-a=$PLUGIN_A_SOURCE" \
   --source "plugin-b=$PLUGIN_B_SOURCE" \
-  --source-ref "plugin-sdk=v0.6.0" --json
+  --source-ref "plugin-sdk=v0.7.0" --json
 ```
 
 Each source is an explicit local normal or bare Git repository. Use repeatable `--source-ref ID=REF` and `--source-directory ID=DIRECTORY` when defaults differ. Plugin IDs are read from committed `plugin.yaml` at the selected ref, never inferred from a directory name. Selected host refs must contain the tooling; creating a worktree does not copy uncommitted host changes from another checkout.
 
 Register every repository/plugin source needed by the collection up front. Registry source mappings are deliberately immutable: repeating the same initialization is allowed, but changing or adding mappings returns `registry_exists` with conflict exit4 and leaves the existing registry intact. Initialize another collection for a different source set; `workspace edit --add-plugin` selects an already registered plugin, not a new repository registration.
 
-The reviewed published SDK `v0.6.0` commit is `1e92fb518b117814acb504aaae1772ff39abcdef`, including the shared read-only profile contract required by this host. Select that release or a reviewed descendant; SDK `v0.5.2` and earlier lack the contract. Subsequent ordinary edits in the selected feature SDK worktree are live development input and do not require per-edit commits. Protected isolation implementation changes require the explicit warning-bearing `--allow-isolation-source-changes` flag; it is scoped to this workspace's child processes and is not a sandbox.
+The reviewed published SDK `v0.7.0` commit is `5b3ef764d1cf738835a723a749a0cb6c45f85e44`, including the shared read-only profile contract and single structured settings validator required by this host. Select that release or a reviewed descendant; older SDK releases do not provide the current settings contract. Subsequent ordinary edits in the selected feature SDK worktree are live development input and do not require per-edit commits. Protected isolation implementation changes require the explicit warning-bearing `--allow-isolation-source-changes` flag; it is scoped to this workspace's child processes and is not a sandbox.
 
 Local package linking requires the actual successful pinned pnpm protocol probe report, not manually asserted booleans. Run the probe once on the integrated host source with its effective SDK-aware module selection, then pass the report explicitly (or place it at `$COLLECTION/.omniview-dev/link-protocol.json`):
 
@@ -71,14 +88,14 @@ The probe performs real native12 recursive peer, singleton, live-export and atom
   --repo ui --repo plugin-sdk \
   --plugin "$PLUGIN_A_ID" --plugin "$PLUGIN_B_ID" \
   --start --mode browser \
-  --reviewed-sdk-revision 1e92fb518b117814acb504aaae1772ff39abcdef \
+  --reviewed-sdk-revision 5b3ef764d1cf738835a723a749a0cb6c45f85e44 \
   --link-evidence "$LINK_EVIDENCE" --json
 
 # The same plugin ID can run independently in another profile.
 "$DEV" workspace create feature-b --root "$COLLECTION" \
   --repo ui --repo plugin-sdk --plugin "$PLUGIN_A_ID" \
   --start --mode browser \
-  --reviewed-sdk-revision 1e92fb518b117814acb504aaae1772ff39abcdef \
+  --reviewed-sdk-revision 5b3ef764d1cf738835a723a749a0cb6c45f85e44 \
   --link-evidence "$LINK_EVIDENCE" --json
 
 "$DEV" workspace inspect feature-a --root "$COLLECTION" --json
@@ -163,7 +180,19 @@ Generated config, secrets, logs and build outputs have a private external UUID o
 
 Ignored dependency/build/cache outputs have exact producer-scoped ownership, not blanket `.local`/`node_modules`/`dist` exemptions. One aggregate installer preserves lockfile provenance, uses strict peers and `--ignore-scripts`, then runs a recursive peer audit; the graph owns generation. Vite/cache lifetimes end only after actual process/descendant exit. Tracked generated bindings/shims still require the developer's normal commit/discard decision. Interrupted cleanup resumes only its recorded per-path progress.
 
+Fresh tree observations use at most four file readers, bounded by available Go
+parallelism. Each reader hashes actual bytes and checks file identity, size, and
+modification time. All readers finish before an image can authorize a transition.
+Checkpoint ordering, complete-workspace refusal checks, and fresh per-leaf
+verification before deletion remain unchanged.
+
 Managed children receive nonsecret `OMNIVIEW_DEV_CLI` from the captured supervisor executable. Bridge token references and native-removal FD capabilities remain host/helper-only. Authenticated `/v1/process` accepts only fixed selected plugin dev commands with exact composition root/version, actual frontend paths and current host leases—not arbitrary commands/cwd. Second plugin installs are rejected; startup consumes the completed aggregate receipt. The outer supervisor retains actual children independently of the desktop host for crash cleanup.
+
+Finite repository commands validate their provenance before launch and retain the
+actual `exec.Cmd` until leader exit, descendant disposal, and output draining
+finish. They do not publish process identities or require a live executable
+snapshot after a short-lived command exits. Published services still require
+kernel-sourced identity capture; permission and inspection failures remain errors.
 
 ## Output and references
 
@@ -341,12 +370,12 @@ matches before verification starts. Standalone and workspace defaults remain
 unchanged; an explicit cache override must be nonempty and absolute.
 
 Linux development headers remain required by the pinned Wails transitive cgo
-dependencies even for server builds. CI caches only their downloaded `.deb`
-archives, keyed by platform, recipe and fresh APT index contents. Before
-privileged installation, `scripts/verify-apt-archives.mjs` checks package identity,
-size and streamed SHA-256 against those authenticated indexes. Native APT
-installation still runs. Successful package installation publishes this payload
-cache before browser execution; it does not certify application acceptance.
+dependencies even for server builds. Linux native CI jobs use the prebuilt
+`ghcr.io/omniviewdev/omniview-ci:ubuntu24-v1` container, refreshed weekly by
+`ci-image.yml`. E2E verifies the image's native and Chromium OS dependencies
+without running APT. Browser binaries retain their exact-version payload cache.
+See [native toolchain maintenance](development-native-toolchain.md#ci-image-maintenance-and-runner-choice)
+for image updates, bootstrap requirements and runner security tradeoffs.
 
 The host React compiler processes owned source, including runtime and benchmark
 sources, rather than reprocessing built dependency/distribution bundles. Actual

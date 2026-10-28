@@ -8,6 +8,10 @@ concurrency:
   group: pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  packages: read
+
 env:
   NODE_OPTIONS: "--max-old-space-size=4096"
   GO_VERSION: "1.26"
@@ -47,6 +51,7 @@ jobs:
             build-tags: "production"
             extra-ldflags: ""
           - os: ubuntu-24.04
+            container: ghcr.io/omniviewdev/omniview-ci:ubuntu24-v1
             platform: linux/amd64
             artifact-name: pr-build-linux
             build-tags: "production"
@@ -61,6 +66,12 @@ jobs:
     env:
       GOWORK: "off"
     steps:
+      # Container Git must own the mount after checkout's temporary HOME expires.
+      - name: Match checkout directory ownership to container user
+        if: runner.os == 'Linux'
+        shell: bash
+        run: chown "$(id -u):$(id -g)" "$PWD"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:

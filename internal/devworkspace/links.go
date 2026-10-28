@@ -495,7 +495,10 @@ func writeLinkFile(root string, e linkFile, data []byte, exists bool) error {
 		if err = os.Remove(path); os.IsNotExist(err) {
 			return nil
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		return syncDirectory(filepath.Dir(path))
 	}
 	f, err := os.CreateTemp(filepath.Dir(path), ".link-*")
 	if err != nil {
@@ -515,7 +518,10 @@ func writeLinkFile(root string, e linkFile, data []byte, exists bool) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(f.Name(), path)
+	if err = os.Rename(f.Name(), path); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(path))
 }
 
 func saveLinkJournal(j *linkJournal) error {
@@ -708,6 +714,9 @@ func (m *Manager) linkWorkspace(ctx context.Context, name string) (Workspace, fu
 	}
 	if err == nil {
 		for i := range j.Resources {
+			if j.Resources[i].Removed {
+				continue
+			}
 			if err = verifyWorktree(ctx, &j.Resources[i], false); err != nil {
 				break
 			}

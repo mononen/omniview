@@ -19,7 +19,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/tidwall/gjson v1.18.0
 	github.com/wailsapp/mimetype v1.4.1
-	github.com/wailsapp/wails/v3 v3.0.0-beta.34.0.20261022002616-a90f7e7f50bf
+	github.com/wailsapp/wails/v3 v3.0.0
 	go.etcd.io/bbolt v1.5.0
 	go.opentelemetry.io/contrib/bridges/otelzap v0.17.0
 	go.opentelemetry.io/contrib/instrumentation/runtime v0.67.0
@@ -71,7 +71,7 @@ require (
 	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.18.3 // indirect
+	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/mailru/easyjson v0.9.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

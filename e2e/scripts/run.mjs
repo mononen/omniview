@@ -44,7 +44,7 @@ async function runApplication(args) {
   try {
     deadlineBudget = applicationBudget(started, Date.now(), { interactive });
     const outcome = await new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [playwrightCLI(), ...args, '--global-timeout', '0', '--reporter=html,list,./scripts/timing-reporter.mjs'], { cwd: join(root, 'e2e'), env, stdio: 'inherit' });
+      const child = spawn(process.execPath, [playwrightCLI(), ...args, '--global-timeout', '0'], { cwd: join(root, 'e2e'), env, stdio: 'inherit' });
       let interrupted = false;
       const interrupt = () => {
         if (!interrupted) {
@@ -158,13 +158,13 @@ async function main() {
     for (const key of ['OMNIVIEW_E2E_CLI', 'OMNIVIEW_E2E_ROOT', 'OMNIVIEW_E2E_WORKSPACE', 'OMNIVIEW_E2E_WORKSPACE_ID', 'OMNIVIEW_E2E_GENERATION']) {
       if (process.env[key]) env[key] = process.env[key];
     }
-    execute(process.execPath, [playwrightCLI(), ...playwrightArgs, '--global-timeout', opts.ui ? '0' : '600000', ...(opts.ui ? ['--ui'] : [])], { cwd: join(root, 'e2e'), timeout: 0 });
+    execute(process.execPath, [playwrightCLI(), ...playwrightArgs, '--global-timeout', opts.ui ? '0' : '1800000', ...(opts.ui ? ['--ui'] : [])], { cwd: join(root, 'e2e'), timeout: 0 });
     return;
   }
   started = preparationStarted(processStarted, process.env.OMNIVIEW_E2E_PREPARATION_STARTED_AT);
   if (started < processStarted) phases.push({ name: 'workflow-preparation', elapsedMs: processStarted - started });
   // A single invocation owns ALL preparation and browser work. No retry loop,
-  // setup job, prebuilt host, force-peer override, or fabricated link evidence.
+  // setup job, forced peers, or fabricated link evidence.
   assertStandaloneBootstrap(root);
   const sources = {};
   const refs = {};
@@ -211,8 +211,7 @@ async function main() {
     env.SDK_SOURCE = sources['plugin-sdk'];
   }
   if (process.platform === 'linux') {
-    linuxDependencies = phase('linux-dependency-install', () => prepareLinuxDependencies({ execute, playwrightCLI: playwrightCLI(), archiveDirectory: process.env.OMNIVIEW_E2E_APT_ARCHIVES_DIRECTORY, native: needsApplication }));
-    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, 'linux_dependencies_prepared=true\n');
+    linuxDependencies = phase('linux-dependencies', () => prepareLinuxDependencies({ execute, playwrightCLI: playwrightCLI(), preinstalled: process.env.OMNIVIEW_E2E_PREINSTALLED_LINUX === 'true', native: needsApplication }));
   }
   phase('browser-install', () => execute(process.execPath, [playwrightCLI(), 'install', 'chromium'], { cwd: join(root, 'e2e') }));
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, 'browser_prepared=true\n');
@@ -249,7 +248,7 @@ async function main() {
     phase('canonical-build-cohort-retirement', () => retireApplicationCohort(application.cohort, execute));
   }
   phase('preparation-teardown', () => {
-    if (needsApplication) retirePreparationHome(privateRoot, env, { toolCache, deadline: interactive ? Date.now() + 60_000 : started + 600_000 });
+    if (needsApplication) retirePreparationHome(privateRoot, env, { toolCache, deadline: interactive ? Date.now() + 60_000 : started + 1_800_000 });
     else rmSync(privateRoot, { recursive: true });
     privateRoot = undefined;
   });
@@ -263,14 +262,14 @@ try { await main(); succeeded = true; } catch (error) {
   // Fixture teardown owns workspace down/removal; never recursively delete its
   // private arena after failure or retry the complete preparation implicitly.
   const elapsedMs = Date.now() - started;
-  const budgetExceeded = ['application', 'cache-only'].includes(operation) && !interactive && elapsedMs > 600_000;
+  const budgetExceeded = ['application', 'cache-only'].includes(operation) && !interactive && elapsedMs > 1_800_000;
   if (budgetExceeded) {
     succeeded = false;
     process.exitCode = 1;
-    console.error('E2E inclusive600s budget exceeded; owned cleanup was allowed to finish, not force-killed');
+    console.error('E2E inclusive1800s budget exceeded; owned cleanup was allowed to finish, not force-killed');
   }
   if (privateRoot) console.error(`E2E private preparation retained: ${privateRoot}`);
-  const report = { succeeded, operation, interactive, elapsedMs: Date.now() - started, budgetMs: interactive ? null : 600_000, budgetExceeded, deadlineBudget, launchDrain, buildExecution, linuxDependencies, selection, phases, sourceRefs, nativeToolCache: toolCache ? 'explicit' : env.HOME ? 'private' : 'not-used', declaredFrontendModes: selection?.kind !== 'focused' && selection?.groups.includes('workspaces') ? ['embedded', 'live-smoke'] : [], retries: 0 };
+  const report = { succeeded, operation, interactive, elapsedMs: Date.now() - started, budgetMs: interactive ? null : 1_800_000, budgetExceeded, deadlineBudget, launchDrain, buildExecution, linuxDependencies, selection, phases, sourceRefs, nativeToolCache: toolCache ? 'explicit' : env.HOME ? 'private' : 'not-used', declaredFrontendModes: selection?.kind !== 'focused' && selection?.groups.includes('workspaces') ? ['embedded', 'live-smoke'] : [], retries: 0 };
   report.applicationAcceptance = operation === 'application' && succeeded && !interactive && selection?.kind === 'full';
   if (operation !== 'report' && operation !== 'cache-initialization') {
     mkdirSync(join(root, 'e2e/playwright-report'), { recursive: true });

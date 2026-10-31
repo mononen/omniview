@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Omniview mock: new-tab launcher</title>
+<script src="icons.js"></script>
+<style>
+:root {
+  /* Sampled from the running dark theme (native workspace) + base-ui tokens. */
+  --content-bg: #0e0f11;
+  --chrome-bg: #141517;
+  --tab-bg: #1a1b1e;
+  --field-bg: #1a1b1f;
+  --surface: #1f2125;
+  --raised: #272a30;
+  --border: #343840;
+  --border-muted: #24272d;
+  --fg: #cccccc;
+  --fg-strong: #ececec;
+  --muted: #9d9d9d;
+  --subtle: #7b8494;
+  --accent: #89a7ee;
+  --accent-soft: rgb(90 127 226 / 0.18);
+  --selected: rgb(90 127 226 / 0.22);
+  --hover: rgb(161 169 182 / 0.11);
+  --success: #3fb97f;
+  --warning: #e0a443;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --duration-panel: 160ms;
+  --duration-interactive: 90ms;
+  --header-h: 38px;
+  --strip-h: 33px;
+  --status-h: 24px;
+  --rail-w: 48px;
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", "DejaVu Sans", sans-serif;
+  font-size: 13px;
+  color: var(--fg);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: default; }
+kbd {
+  font-family: "DejaVu Sans Mono", ui-monospace, monospace; font-size: 10.5px; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; background: rgb(255 255 255 / 0.02);
+  line-height: 14px; display: inline-block; min-width: 18px; text-align: center;
+}
+.ic { display: inline-flex; flex: none; }
+.ic svg { width: 100%; height: 100%; }
+
+/* ---------- window ---------- */
+.window {
+  position: absolute; inset: 0; display: grid; overflow: hidden;
+  grid-template-rows: var(--header-h) var(--strip-h) 1fr var(--status-h);
+  grid-template-columns: 1fr;
+  background: var(--content-bg);
+}
+.window.with-rail { grid-template-columns: var(--rail-w) 1fr; }
+.window.with-rail .header, .window.with-rail .status { grid-column: 1 / -1; }
+.rail { grid-row: 2 / 4; background: var(--chrome-bg); border-right: 1px solid var(--border-muted); display: flex; flex-direction: column; align-items: center; }
+.rail-item { width: 48px; height: 48px; display: grid; place-items: center; color: var(--muted); position: relative; }
+.rail-item.active::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 0 2px 2px 0; background: var(--accent); }
+.rail-item.active { color: var(--fg-strong); }
+
+.header {
+  display: grid; grid-template-columns: 1fr minmax(0, 600px) 1fr; align-items: center;
+  background: var(--chrome-bg); border-bottom: 1px solid var(--border-muted); padding: 0 10px; gap: 12px;
+}
+.lights { display: flex; gap: 8px; padding-left: 4px; }
+.lights i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+.lights i:nth-child(1) { background: #ff5f57; } .lights i:nth-child(2) { background: #febc2e; } .lights i:nth-child(3) { background: #28c840; }
+.window.unfocused .lights i { background: #3a3c41; }
+.hdr-center { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.newtab-btn {
+  width: 28px; height: 26px; flex: none; border-radius: 6px; display: grid; place-items: center;
+  color: var(--muted); background: var(--field-bg); border: 1px solid transparent;
+  transition: background var(--duration-interactive) var(--ease), color var(--duration-interactive) var(--ease), border-color var(--duration-interactive);
+}
+.newtab-btn:hover, .newtab-btn.hover { background: var(--raised); color: var(--fg-strong); }
+.newtab-btn[aria-expanded="true"] { background: var(--selected); color: var(--fg-strong); border-color: rgb(137 167 238 / 0.35); }
+.newtab-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.search {
+  flex: 1; min-width: 0; height: 26px; border-radius: 6px; background: var(--field-bg); display: flex; align-items: center; gap: 8px;
+  padding: 0 4px 0 9px; color: #6f737b; font-size: 12.5px;
+}
+.search .grow { flex: 1; text-align: left; }
+.hdr-right { display: flex; justify-content: flex-end; gap: 4px; color: var(--subtle); }
+.hdr-right span { width: 26px; height: 26px; display: grid; place-items: center; }
+
+.strip { background: var(--content-bg); border-bottom: 1px solid var(--border-muted); display: flex; align-items: center; gap: 2px; padding: 0 6px; min-width: 0; }
+.tab {
+  height: 26px; display: flex; align-items: center; gap: 7px; padding: 0 8px 0 10px; border-radius: 6px;
+  color: var(--muted); max-width: 210px; min-width: 120px; font-size: 12.5px; position: relative; white-space: nowrap;
+}
+.tab .t { overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.tab .x { width: 14px; height: 14px; color: var(--subtle); opacity: 0; }
+.tab:hover .x, .tab.active .x { opacity: 1; }
+.tab.active { background: var(--tab-bg); color: var(--fg-strong); }
+.tab.active::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: -4px; height: 2px; border-radius: 2px; background: var(--accent); }
+.tab .pic { width: 14px; height: 14px; color: var(--muted); }
+.tab.active .pic { color: var(--pc, var(--fg)); }
+.strip .spacer { flex: 1; }
+.strip-plus { width: 26px; height: 26px; display: grid; place-items: center; color: var(--subtle); border-radius: 6px; }
+.tab.enter { animation: tabIn 220ms var(--ease) both; }
+@keyframes tabIn { from { opacity: 0; transform: translateY(5px) scale(0.96); } to { opacity: 1; transform: none; } }
+.tab.bg-new { animation: tabIn 220ms var(--ease) both, bgPulse 1400ms var(--ease) 1; }
+@keyframes bgPulse { 0%,100% { box-shadow: inset 0 0 0 1px transparent; } 25% { box-shadow: inset 0 0 0 1px rgb(137 167 238 / 0.65); background: var(--accent-soft); } }
+
+.content { display: flex; min-height: 0; min-width: 0; overflow: hidden; }
+.status { background: var(--chrome-bg); border-top: 1px solid var(--border-muted); display: flex; align-items: center; gap: 16px; padding: 0 10px; font-size: 11px; color: var(--muted); }
+.dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; background: var(--success); margin-right: 6px; vertical-align: 1px; }
+.dot.warn { background: var(--warning); }
+
+/* ---------- plugin pages ---------- */
+.side { width: 236px; flex: none; background: var(--chrome-bg); border-right: 1px solid var(--border-muted); padding: 10px 8px; }
+.ctx { display: flex; align-items: center; gap: 9px; padding: 4px 6px 12px; border-bottom: 1px solid var(--border-muted); margin-bottom: 8px; }
+.avatar { width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center; font-weight: 700; font-size: 11px; color: #fff; }
+.nav { display: flex; align-items: center; gap: 9px; height: 26px; padding: 0 8px; border-radius: 5px; color: var(--fg); font-size: 12.5px; }
+.nav .ic { color: var(--muted); }
+.nav.sel { background: var(--selected); color: var(--fg-strong); }
+.nav.sel .ic { color: var(--accent); }
+.main { flex: 1; min-width: 0; padding: 18px 22px; overflow: hidden; }
+.page-h { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+.page-h h1 { font-size: 18px; margin: 0; color: var(--fg-strong); font-weight: 600; }
+.page-h .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.page-h .grow { flex: 1; }
+.pi { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; flex: none; background: color-mix(in srgb, var(--c) 16%, transparent); color: var(--c); }
+.pi .ic { width: 15px; height: 15px; }
+.pi.lg { width: 40px; height: 40px; border-radius: 10px; }
+.pi.lg .ic { width: 22px; height: 22px; }
+.btn { height: 28px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--border); color: var(--fg); display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.btn.primary { background: #3d5fc4; border-color: #4a6bd0; color: #fff; }
+.filter { height: 28px; width: 260px; border-radius: 6px; background: var(--field-bg); border: 1px solid var(--border-muted); display: flex; align-items: center; gap: 8px; padding: 0 9px; color: #6f737b; font-size: 12.5px; }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th { text-align: left; color: var(--subtle); font-weight: 500; font-size: 11.5px; padding: 8px 12px; border-bottom: 1px solid var(--border-muted); }
+td { padding: 10px 12px; border-bottom: 1px solid var(--border-muted); color: var(--fg); white-space: nowrap; }
+td.name { color: var(--fg-strong); font-weight: 500; }
+td.mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11.5px; color: var(--muted); }
+.card-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+.card { background: var(--chrome-bg); border: 1px solid var(--border-muted); border-radius: 8px; padding: 12px; }
+.card .n { font-size: 20px; color: var(--fg-strong); font-weight: 600; }
+.card .l { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+.card .s { color: var(--success); font-size: 11px; margin-top: 8px; }
+.panel { background: var(--chrome-bg); border: 1px solid var(--border-muted); border-radius: 8px; overflow: hidden; }
+.panel-h { padding: 10px 12px; font-weight: 600; color: var(--fg-strong); border-bottom: 1px solid var(--border-muted); font-size: 12.5px; }
+.pill { font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid; }
+.pill.ok { color: var(--success); border-color: rgb(63 185 127 / 0.35); background: rgb(63 185 127 / 0.08); }
+.pill.idle { color: var(--muted); border-color: var(--border); }
+.pill.warn { color: var(--warning); border-color: rgb(224 164 67 / 0.35); background: rgb(224 164 67 / 0.08); }
+.subtabs { display: flex; gap: 4px; margin-bottom: 14px; }
+.subtabs span { padding: 4px 10px; border-radius: 5px; color: var(--muted); font-size: 12px; }
+.subtabs span.sel { background: var(--tab-bg); color: var(--fg-strong); }
+
+/* ---------- new-tab menu ---------- */
+#layer { position: absolute; inset: 0; pointer-events: none; }
+#layer > * { pointer-events: auto; }
+.menu {
+  position: absolute; width: 312px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.45), 0 0 0 1px rgb(0 0 0 / 0.25); padding: 6px; outline: none;
+  transform-origin: 14px 0; animation: menuDrop 220ms var(--ease) both;
+}
+@keyframes menuIn { from { opacity: 0; transform: translateY(-6px) scale(0.96); } to { opacity: 1; transform: none; } }
+/* Drop-down reveal: the panel unrolls from under the + button; the shadow stays outside the clip. */
+@keyframes menuDrop {
+  from { opacity: 0; transform: translateY(-4px); clip-path: inset(-40px -40px calc(100% - 12px) -40px round 10px); }
+  35% { opacity: 1; }
+  to { opacity: 1; transform: none; clip-path: inset(-40px -40px -40px -40px round 10px); }
+}
+.menu.closing { animation: menuOut var(--duration-interactive) ease-in both; }
+@keyframes menuOut { to { opacity: 0; transform: translateY(-4px) scale(0.98); } }
+.menu-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 6px; color: var(--subtle); font-size: 11.5px; font-weight: 500; letter-spacing: 0.02em; }
+.mi {
+  display: flex; align-items: center; gap: 10px; height: 42px; padding: 0 8px; border-radius: 7px; position: relative;
+  animation: itemIn 220ms var(--ease) both; animation-delay: calc(40ms + var(--i) * 28ms);
+}
+@keyframes itemIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.mi.hl { background: var(--selected); }
+.mi-text { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.mi-name { color: var(--fg-strong); font-size: 13px; }
+.mi-name u { text-decoration: none; }
+.mi-meta { color: var(--subtle); font-size: 11px; margin-top: 1px; }
+.mi-hint { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+.mi-hint .enter { display: none; }
+.mi.hl .mi-hint .enter { display: inline-flex; align-items: center; gap: 5px; color: var(--fg); }
+.mi.hl kbd.letter { display: none; }
+.menu-sep { height: 1px; background: var(--border-muted); margin: 6px -6px 0; }
+.menu-foot { display: flex; gap: 12px; padding: 8px 8px 3px; color: var(--subtle); font-size: 11px; animation: itemIn 220ms var(--ease) both; animation-delay: 130ms; }
+.menu-foot span { display: inline-flex; align-items: center; gap: 4px; transition: color var(--duration-interactive); }
+.menu-foot span.on { color: var(--fg-strong); }
+.menu-foot span.on kbd { color: var(--fg-strong); border-color: var(--accent); }
+
+.tooltip {
+  position: absolute; background: #2b2e34; border: 1px solid var(--border); color: var(--fg-strong); font-size: 12px; border-radius: 6px;
+  padding: 5px 8px; display: flex; align-items: center; gap: 8px; box-shadow: 0 6px 18px rgb(0 0 0 / 0.35);
+  animation: menuIn 120ms var(--ease) both; white-space: nowrap;
+}
+
+/* ---------- command palette ---------- */
+.backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / 0.42); animation: fadeIn 120ms var(--ease) both; }
+@keyframes fadeIn { from { opacity: 0; } }
+.palette {
+  position: absolute; left: 50%; top: 72px; width: 660px; margin-left: -330px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; box-shadow: 0 24px 60px rgb(0 0 0 / 0.55); overflow: hidden; animation: menuIn var(--duration-panel) var(--ease) both; transform-origin: 50% 0;
+}
+.p-input { display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 14px; border-bottom: 1px solid var(--border-muted); color: var(--muted); }
+.p-input input { flex: 1; background: none; border: 0; outline: none; font: inherit; font-size: 15px; color: var(--fg-strong); caret-color: var(--accent); }
+.p-input input::placeholder { color: #6f737b; }
+.p-list { max-height: 500px; overflow-y: auto; padding: 6px; }
+.p-sec { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px 4px; color: var(--subtle); font-size: 11.5px; font-weight: 500; }
+.p-row { display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 10px; border-radius: 7px; }
+.p-row.hl { background: var(--selected); }
+.p-row .lbl { color: var(--fg-strong); }
+.p-row .lbl mark { background: none; color: var(--accent); font-weight: 600; }
+.p-row .desc { color: var(--subtle); font-size: 11.5px; }
+.p-row .grow { flex: 1; display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.p-row .act { display: none; align-items: center; gap: 6px; color: var(--fg); font-size: 11px; }
+.p-row.hl .act { display: inline-flex; }
+.p-row .gi { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; color: var(--muted); background: var(--raised); }
+.p-row .gi .ic { width: 14px; height: 14px; }
+.p-foot { display: flex; gap: 14px; padding: 8px 14px; border-top: 1px solid var(--border-muted); color: var(--subtle); font-size: 11px; }
+.p-foot span { display: inline-flex; align-items: center; gap: 4px; }
+.p-foot span.on { color: var(--fg-strong); }
+.p-foot span.on kbd { color: var(--fg-strong); border-color: var(--accent); }
+.p-empty { padding: 24px; text-align: center; color: var(--subtle); }
+
+/* ---------- secondary window ---------- */
+.window.secondary {
+  inset: auto; left: 300px; top: 96px; width: 1040px; height: 660px; border-radius: 10px; border: 1px solid #3a3d44;
+  box-shadow: 0 30px 80px rgb(0 0 0 / 0.6); animation: winIn 260ms var(--ease) both;
+}
+@keyframes winIn { from { opacity: 0; transform: scale(0.94); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .menu, .mi, .menu-foot, .tab.enter, .tab.bg-new, .palette, .backdrop, .tooltip, .window.secondary { animation: none !important; }
+}
+</style>
+</head>
+<body>
+<div id="main"></div>
+<div id="layer"></div>
+<script>
+'use strict';
+const icon = (name, size = 16, extra = '') => `<span class="ic" style="width:${size}px;height:${size}px;${extra}">${ICONS[name]}</span>`;
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+const ALL_PLUGINS = [
+  { id: 'flux', name: 'Flux', icon: 'SiFlux', color: '#6f95ff', meta: 'GitOps · 2 clusters', home: 'Clusters' },
+  { id: 'kubernetes', name: 'Kubernetes', icon: 'SiKubernetes', color: '#5b8ef0', meta: 'Clusters · 4 contexts', home: 'Clusters' },
+  { id: 'proxmox', name: 'Proxmox', icon: 'SiProxmox', color: '#f08a24', meta: 'Virtualization · 1 connection', home: 'Connections' },
+];
+const params = new URLSearchParams(location.search);
+const LAYOUT = params.get('layout') || 'launcher'; // 'current' renders today's rail layout
+const installed = (params.get('plugins') || 'flux,kubernetes,proxmox').split(',');
+const plugins = ALL_PLUGINS.filter((p) => installed.includes(p.id)).sort((a, b) => a.name.localeCompare(b.name));
+const pluginById = Object.fromEntries(ALL_PLUGINS.map((p) => [p.id, p]));
+const MAC = params.get('platform') !== 'linux';
+const MOD = MAC ? '⌘' : 'Ctrl+';
+const SHIFT = MAC ? '⇧' : 'Shift+';
+
+let nextTabId = 1;
+const makeTab = (pluginId, title, page) => ({ id: nextTabId++, pluginId, title, page, anim: null });
+const initialTabs = [];
+if (installed.includes('kubernetes')) initialTabs.push(makeTab('kubernetes', 'prod-eu-1', 'k8s-dashboard'));
+if (installed.includes('proxmox')) initialTabs.push(makeTab('proxmox', 'homelab', 'pve-overview'));
+if (!initialTabs.length) initialTabs.push(makeTab(plugins[0].id, plugins[0].name, 'home'));
+
+const state = {
+  main: { tabs: initialTabs, activeId: initialTabs[0].id, focused: true },
+  secondary: null,
+  menu: null,        // { highlight, el }
+  palette: null,     // { query, highlight, el }
+  modifiers: { shift: false, mod: false },
+};
+
+/* ---------------- page renderers ---------------- */
+function k8sDashboard() {
+  const navs = [['LuLayoutDashboard', 'Dashboard', 1], ['LuServer', 'Nodes'], ['LuActivity', 'Events'], ['LuBox', 'Namespaces'], ['LuLayers', 'Workload'], ['LuSettings', 'Config'], ['LuNetwork', 'Networking'], ['LuHardDrive', 'Storage'], ['LuCircleCheck', 'Access Control'], ['LuGitBranch', 'Helm']];
+  const cards = [['142', 'Pods', '139 running'], ['38', 'Deployments', 'all available'], ['6', 'StatefulSets', 'all ready'], ['9', 'DaemonSets', 'all scheduled'], ['12', 'Jobs', '12 succeeded'], ['4', 'CronJobs', 'next in 6m']];
+  const events = [['Normal', 'Scaled', 'deployment/api-gateway', 'Scaled up replica set to 6', '12s'], ['Normal', 'Pulled', 'pod/checkout-7f9c6', 'Container image pulled', '41s'], ['Warning', 'BackOff', 'pod/batch-sync-28s', 'Back-off restarting failed container', '2m'], ['Normal', 'Created', 'job/report-2910', 'Created pod: report-2910-x8w2', '4m']];
+  return `<div class="side">
+    <div class="ctx"><span class="avatar" style="background:#3d6fd8">PE</span><div><div style="color:var(--fg-strong);font-weight:600">prod-eu-1</div><div style="color:var(--subtle);font-size:11px">eks · eu-west-1</div></div></div>
+    ${navs.map(([i, l, s]) => `<div class="nav ${s ? 'sel' : ''}">${icon(i, 14)}${l}</div>`).join('')}
+  </div>
+  <div class="main">
+    <div class="subtabs"><span class="sel">Overview</span><span>Metrics</span><span>Benchmarks</span></div>
+    <div class="card-grid">${cards.map(([n, l, s]) => `<div class="card"><div class="n">${n}</div><div class="l">${l}</div><div class="s">${s}</div></div>`).join('')}</div>
+    <div class="panel"><div class="panel-h">Recent events</div><table><tr><th>Type</th><th>Reason</th><th>Object</th><th>Message</th><th>Age</th></tr>
+    ${events.map(([t, r, o, m, a]) => `<tr><td><span class="pill ${t === 'Warning' ? 'warn' : 'ok'}">${t}</span></td><td>${r}</td><td class="mono">${o}</td><td>${m}</td><td style="color:var(--muted)">${a}</td></tr>`).join('')}</table></div>
+  </div>`;
+}
+function pveOverview() {
+  const cards = [['3', 'Nodes', 'all online'], ['27', 'Guests', '24 running'], ['41%', 'CPU', '96 cores'], ['58%', 'Memory', '412 / 704 GiB'], ['6', 'Storage', 'healthy'], ['HEALTH_OK', 'Ceph', '18 OSDs']];
+  const nodes = [['pve-01', 'online', '38%', '61%', '9'], ['pve-02', 'online', '52%', '57%', '10'], ['pve-03', 'online', '33%', '55%', '8']];
+  return `<div class="side">
+    <div class="ctx"><span class="avatar" style="background:#c46a17">HL</span><div><div style="color:var(--fg-strong);font-weight:600">homelab</div><div style="color:var(--subtle);font-size:11px">PVE 8.2.4 · 3 nodes</div></div></div>
+    ${[['LuLayoutDashboard', 'Overview', 1], ['LuServer', 'Nodes'], ['LuMonitor', 'Virtual machines'], ['LuBox', 'Containers'], ['LuHardDrive', 'Storage'], ['LuNetwork', 'Topology']].map(([i, l, s]) => `<div class="nav ${s ? 'sel' : ''}">${icon(ICONS[i] ? i : 'LuServer', 14)}${l}</div>`).join('')}
+  </div>
+  <div class="main">
+    <div class="card-grid">${cards.map(([n, l, s]) => `<div class="card"><div class="n">${n}</div><div class="l">${l}</div><div class="s">${s}</div></div>`).join('')}</div>
+    <div class="panel"><div class="panel-h">Nodes</div><table><tr><th>Node</th><th>Status</th><th>CPU</th><th>Memory</th><th>Guests</th></tr>
+    ${nodes.map(([n, s, c, m, g]) => `<tr><td class="name">${n}</td><td><span class="pill ok">${s}</span></td><td>${c}</td><td>${m}</td><td>${g}</td></tr>`).join('')}</table></div>
+  </div>`;
+}
+const HOME_ROWS = {
+  kubernetes: { sub: 'Clusters from 2 kubeconfig files', cols: ['Name', 'Context', 'Version', 'Status'], rows: [
+    ['prod-eu-1', 'arn:aws:eks:eu-west-1:4410:cluster/prod-eu-1', 'v1.31.2', 'Connected'], ['prod-us-2', 'arn:aws:eks:us-east-2:4410:cluster/prod-us-2', 'v1.31.2', 'Connected'],
+    ['staging', 'gke_omniview_europe-west4_staging', 'v1.30.5', 'Idle'], ['kind-dev', 'kind-kind', 'v1.32.0', 'Idle']] },
+  proxmox: { sub: 'Proxmox VE clusters and standalone hosts', cols: ['Name', 'Endpoint', 'Version', 'Status'], rows: [
+    ['homelab', 'https://pve-01.lan:8006', 'PVE 8.2.4 · 3 nodes · 27 guests', 'Connected']] },
+  flux: { sub: 'Flux installations found in your clusters', cols: ['Cluster', 'Flux version', 'Reconcilers', 'Status'], rows: [
+    ['prod-eu-1', 'v2.4.0', '14 kustomizations · 22 helm releases', 'Ready'], ['prod-us-2', 'v2.4.0', '11 kustomizations · 19 helm releases', 'Ready']] },
+};
+function pluginHome(pluginId) {
+  const p = pluginById[pluginId]; const h = HOME_ROWS[pluginId];
+  return `<div class="main" style="padding:26px 30px">
+    <div class="page-h"><span class="pi lg" style="--c:${p.color}">${icon(p.icon, 22)}</span>
+      <div><h1>${p.name}</h1><div class="sub">${h.sub}</div></div><span class="grow"></span>
+      <span class="filter">${icon('LuSearch', 13)}Filter ${p.home.toLowerCase()}…</span><span class="btn primary">${icon('LuPlus', 13)}Add connection</span></div>
+    <div class="panel"><div class="panel-h">${p.home} <span style="color:var(--subtle);font-weight:400;margin-left:6px">${h.rows.length}</span></div>
+    <table><tr>${h.cols.map((c) => `<th>${c}</th>`).join('')}</tr>
+    ${h.rows.map(([a, b, c, s]) => `<tr><td class="name"><span style="display:inline-flex;align-items:center;gap:8px">${icon(p.icon, 13, `color:${p.color}`)}${a}</span></td><td class="mono">${b}</td><td>${c}</td><td><span class="pill ${s === 'Idle' ? 'idle' : 'ok'}">${s}</span></td></tr>`).join('')}
+    </table></div></div>`;
+}
+const renderPage = (tab) => tab.page === 'k8s-dashboard' ? k8sDashboard() : tab.page === 'pve-overview' ? pveOverview() : pluginHome(tab.pluginId);
+
+/* ---------------- window ---------------- */
+function renderWindow(win, { primary }) {
+  const rail = LAYOUT === 'current' && primary;
+  const active = win.tabs.find((t) => t.id === win.activeId);
+  const header = `<div class="header">
+    <div class="lights"><i></i><i></i><i></i></div>
+    <div class="hdr-center">
+      ${rail ? '' : `<button class="newtab-btn" id="${primary ? 'newtab' : ''}" aria-label="${plugins.length === 1 ? `New ${plugins[0].name} tab` : 'New tab'}" aria-haspopup="${plugins.length > 1 ? 'menu' : 'false'}" aria-expanded="false">${icon('LuPlus', 15)}</button>`}
+      <button class="search" ${primary ? 'id="search"' : ''}>${icon('LuSearch', 14)}<span class="grow">Search anything…</span><kbd>${MOD}K</kbd></button>
+    </div>
+    <div class="hdr-right"><span>${icon('LuHouse', 15)}</span><span>${icon('LuSettings', 15)}</span><span>${icon('LuUnplug', 15)}</span></div>
+  </div>`;
+  const strip = `<div class="strip">${win.tabs.map((t) => {
+    const p = pluginById[t.pluginId];
+    return `<div class="tab ${t.id === win.activeId ? 'active' : ''} ${t.anim || ''}" data-tab="${t.id}" style="--pc:${p.color}">${icon(p.icon, 14).replace('class="ic"', 'class="ic pic"')}<span class="t">${esc(t.title)}</span>${icon('LuX', 14).replace('class="ic"', 'class="ic x"')}</div>`;
+  }).join('')}<span class="spacer"></span>${rail ? `<span class="strip-plus">${icon('LuPlus', 15)}</span>` : ''}</div>`;
+  const railHtml = rail ? `<div class="rail">${plugins.map((p) => `<div class="rail-item ${active && active.pluginId === p.id ? 'active' : ''}">${icon(p.icon, 24)}</div>`).join('')}</div>` : '';
+  const status = `<div class="status"><span><span class="dot"></span>DEV · Native</span>${plugins.map((p) => `<span><span class="dot"></span>${p.id} · Ready</span>`).join('')}</div>`;
+  return { cls: `window ${rail ? 'with-rail' : ''} ${win.focused ? '' : 'unfocused'}`, html: header + railHtml + strip + `<div class="content">${active ? renderPage(active) : ''}</div>` + status };
+}
+function renderMain() {
+  const { cls, html } = renderWindow(state.main, { primary: true });
+  const main = document.getElementById('main');
+  main.className = cls; main.innerHTML = html;
+  for (const t of state.main.tabs) t.anim = null; // play enter animations once
+  const btn = document.getElementById('newtab');
+  if (btn) {
+    btn.addEventListener('click', (e) => onNewTabButton(e));
+    btn.addEventListener('auxclick', (e) => { if (e.button === 1 && plugins.length === 1) openPlugin(plugins[0], 'background'); });
+    btn.addEventListener('mouseenter', () => { if (!state.menu) showTooltip(btn); });
+    btn.addEventListener('mouseleave', hideTooltip);
+  }
+  const search = document.getElementById('search');
+  if (search) search.addEventListener('click', () => openPalette());
+  main.querySelectorAll('.tab').forEach((el) => el.addEventListener('click', () => { state.main.activeId = Number(el.dataset.tab); renderMain(); }));
+}
+function renderSecondary() {
+  document.querySelectorAll('.window.secondary').forEach((n) => n.remove());
+  if (!state.secondary) return;
+  const { cls, html } = renderWindow(state.secondary, { primary: false });
+  const el = document.createElement('div');
+  el.className = cls + ' secondary'; el.innerHTML = html;
+  document.body.appendChild(el);
+}
+
+/* ---------------- opening plugins ---------------- */
+const modeFromEvent = (e) => (e.shiftKey ? 'window' : (e.metaKey || e.ctrlKey || e.button === 1) ? 'background' : 'tab');
+function openPlugin(plugin, mode) {
+  const tab = makeTab(plugin.id, plugin.name, 'home');
+  if (mode === 'window') {
+    state.secondary = { tabs: [tab], activeId: tab.id, focused: true };
+    state.main.focused = false;
+    renderMain(); renderSecondary();
+    return;
+  }
+  const win = state.main;
+  const at = win.tabs.findIndex((t) => t.id === win.activeId) + 1;
+  win.tabs.splice(at, 0, tab);
+  tab.anim = mode === 'background' ? 'bg-new' : 'enter';
+  if (mode === 'tab') win.activeId = tab.id;
+  renderMain();
+}
+
+/* ---------------- tooltip ---------------- */
+function showTooltip(btn) {
+  hideTooltip();
+  const r = btn.getBoundingClientRect();
+  const tip = document.createElement('div');
+  tip.className = 'tooltip'; tip.id = 'tip';
+  const label = plugins.length === 1 ? `New ${plugins[0].name} tab` : 'New tab';
+  tip.innerHTML = `${plugins.length === 1 ? `<span class="pi" style="--c:${plugins[0].color};width:18px;height:18px;border-radius:5px">${icon(plugins[0].icon, 11)}</span>` : ''}<span>${label}</span><kbd>${MOD}T</kbd>`;
+  tip.style.left = `${r.left}px`; tip.style.top = `${r.bottom + 8}px`;
+  document.getElementById('layer').appendChild(tip);
+}
+function hideTooltip() { document.getElementById('tip')?.remove(); }
+
+/* ---------------- new-tab menu ---------------- */
+function onNewTabButton(e) {
+  hideTooltip();
+  if (state.menu) { closeMenu(); return; }
+  if (plugins.length === 1) { openPlugin(plugins[0], modeFromEvent(e)); return; }
+  openMenu();
+}
+function defaultHighlight() {
+  const active = state.main.tabs.find((t) => t.id === state.main.activeId);
+  const i = plugins.findIndex((p) => active && p.id === active.pluginId);
+  return i < 0 ? 0 : i;
+}
+function openMenu() {
+  const btn = document.getElementById('newtab');
+  const r = btn.getBoundingClientRect();
+  const el = document.createElement('div');
+  el.className = 'menu'; el.tabIndex = -1; el.setAttribute('role', 'menu'); el.setAttribute('aria-label', 'New tab');
+  el.style.left = `${r.left - 6}px`; el.style.top = `${r.bottom + 6}px`;
+  el.innerHTML = `<div class="menu-head"><span>NEW TAB</span><kbd>${MOD}T</kbd></div>
+    ${plugins.map((p, i) => `<div class="mi" role="menuitem" id="mi-${p.id}" data-i="${i}" style="--i:${i}">
+      <span class="pi" style="--c:${p.color}">${icon(p.icon, 15)}</span>
+      <span class="mi-text"><span class="mi-name"><u>${p.name[0]}</u>${p.name.slice(1)}</span><span class="mi-meta">${p.meta}</span></span>
+      <span class="mi-hint"><kbd class="letter">${p.name[0]}</kbd><span class="enter"></span></span>
+    </div>`).join('')}
+    <div class="menu-sep"></div>
+    <div class="menu-foot">
+      <span data-m="none"><kbd>↵</kbd>Tab</span>
+      <span data-m="mod"><kbd>${MOD}↵</kbd>Background</span>
+      <span data-m="shift"><kbd>${SHIFT}↵</kbd>Window</span>
+    </div>`;
+  document.getElementById('layer').appendChild(el);
+  btn.setAttribute('aria-expanded', 'true');
+  state.menu = { el, highlight: defaultHighlight(), typed: '', typedAt: 0 };
+  el.querySelectorAll('.mi').forEach((row) => {
+    row.addEventListener('mousemove', () => setMenuHighlight(Number(row.dataset.i)));
+    row.addEventListener('click', (e) => chooseMenuItem(Number(row.dataset.i), modeFromEvent(e)));
+    row.addEventListener('auxclick', (e) => { if (e.button === 1) chooseMenuItem(Number(row.dataset.i), 'background'); });
+  });
+  updateMenu();
+  el.focus();
+}
+function closeMenu({ restoreFocus = true } = {}) {
+  const m = state.menu; if (!m) return;
+  state.menu = null;
+  m.el.classList.add('closing');
+  m.el.addEventListener('animationend', () => m.el.remove(), { once: true });
+  const btn = document.getElementById('newtab');
+  btn?.setAttribute('aria-expanded', 'false');
+  if (restoreFocus) btn?.focus({ focusVisible: false });
+}
+function setMenuHighlight(i) { if (!state.menu) return; state.menu.highlight = (i + plugins.length) % plugins.length; updateMenu(); }
+function hintFor(mode) {
+  if (mode === 'window') return `${icon('LuAppWindow', 13)}New window`;
+  if (mode === 'background') return `${icon('LuPanelsTopLeft', 13)}Background tab`;
+  return `Open ${icon('LuCornerDownLeft', 13)}`;
+}
+const currentMode = () => (state.modifiers.shift ? 'window' : state.modifiers.mod ? 'background' : 'tab');
+function updateMenu() {
+  const m = state.menu; if (!m) return;
+  const mode = currentMode();
+  m.el.querySelectorAll('.mi').forEach((row, i) => {
+    const on = i === m.highlight;
+    row.classList.toggle('hl', on);
+    row.querySelector('.enter').innerHTML = on ? hintFor(mode) : '';
+  });
+  m.el.setAttribute('aria-activedescendant', `mi-${plugins[m.highlight].id}`);
+  const key = mode === 'window' ? 'shift' : mode === 'background' ? 'mod' : 'none';
+  m.el.querySelectorAll('.menu-foot span').forEach((s) => s.classList.toggle('on', s.dataset.m === key));
+}
+function chooseMenuItem(i, mode) { const p = plugins[i]; closeMenu({ restoreFocus: false }); openPlugin(p, mode); }
+// WAI-ARIA menu type-ahead: printable keys jump to the next item whose name starts with the typed
+// prefix; repeating one letter cycles through items sharing that first letter.
+function typeAhead(ch) {
+  const m = state.menu; const now = performance.now();
+  m.typed = now - m.typedAt > 700 ? ch : m.typed + ch; m.typedAt = now;
+  const repeated = [...m.typed].every((c) => c === ch);
+  const prefix = repeated ? ch : m.typed;
+  const start = repeated ? m.highlight + 1 : m.highlight;
+  for (let k = 0; k < plugins.length; k++) {
+    const i = (start + k) % plugins.length;
+    if (plugins[i].name.toLowerCase().startsWith(prefix)) { setMenuHighlight(i); return; }
+  }
+}
+function menuKey(e) {
+  const m = state.menu;
+  switch (e.key) {
+    case 'ArrowDown': setMenuHighlight(m.highlight + 1); break;
+    case 'ArrowUp': setMenuHighlight(m.highlight - 1); break;
+    case 'Home': setMenuHighlight(0); break;
+    case 'End': setMenuHighlight(plugins.length - 1); break;
+    case 'Enter': case ' ': chooseMenuItem(m.highlight, modeFromEvent(e)); break;
+    case 'Escape': closeMenu(); break;
+    case 'Tab': closeMenu(); break;
+    default:
+      if (e.key.length === 1 && /\S/.test(e.key) && !e.metaKey && !e.ctrlKey && !e.altKey) typeAhead(e.key.toLowerCase());
+      else return false;
+  }
+  return true;
+}
+
+/* ---------------- command palette ---------------- */
+function paletteCatalogue() {
+  const items = plugins.map((p) => ({ section: 'New tab', kind: 'newtab', plugin: p, label: `New ${p.name} tab`, desc: `Opens ${p.name} home`, keywords: `new tab open launch plugin ${p.name} ${p.home}` }));
+  items.push(
+    { section: 'Navigation', icon: 'LuHouse', label: 'Home', desc: 'Omniview start page', keywords: 'home start' },
+    { section: 'Navigation', icon: 'LuUnplug', label: 'Plugins', desc: 'Install and manage plugins', keywords: 'plugins marketplace extensions' },
+    { section: 'Navigation', icon: 'LuSettings', label: 'Settings', desc: 'Preferences', keywords: 'settings preferences' },
+  );
+  const recent = [['kubernetes', 'prod-eu-1', 'Kubernetes cluster'], ['proxmox', 'homelab', 'Proxmox connection'], ['flux', 'prod-us-2', 'Flux installation'], ['proxmox', 'pve-02', 'Proxmox node · homelab']];
+  for (const [id, label, desc] of recent) if (installed.includes(id)) items.push({ section: 'Recent', plugin: pluginById[id], label, desc, keywords: `${pluginById[id].name} ${desc}` });
+  return items;
+}
+function paletteResults(query) {
+  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+  return paletteCatalogue().filter((it) => {
+    const words = `${it.label} ${it.keywords}`.toLowerCase().split(/[\s·]+/);
+    return tokens.every((t) => words.some((w) => w.startsWith(t)));
+  });
+}
+function highlightLabel(label, query) {
+  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+  return label.split(' ').map((w) => {
+    const t = tokens.find((tk) => w.toLowerCase().startsWith(tk));
+    return t ? `<mark>${esc(w.slice(0, t.length))}</mark>${esc(w.slice(t.length))}` : esc(w);
+  }).join(' ');
+}
+function openPalette(initialQuery = '') {
+  if (state.palette) return;
+  closeMenu({ restoreFocus: false }); hideTooltip();
+  const layer = document.getElementById('layer');
+  const backdrop = document.createElement('div'); backdrop.className = 'backdrop';
+  const el = document.createElement('div'); el.className = 'palette'; el.setAttribute('role', 'dialog');
+  el.innerHTML = `<div class="p-input">${icon('LuSearch', 16)}<input id="pq" placeholder="Search anything…" autocomplete="off"><kbd>esc</kbd></div><div class="p-list" role="listbox"></div>
+    <div class="p-foot"><span><kbd>↑↓</kbd>Navigate</span><span data-m="none"><kbd>↵</kbd>Open</span><span data-m="mod"><kbd>${MOD}↵</kbd>Background tab</span><span data-m="shift"><kbd>${SHIFT}↵</kbd>New window</span><span><kbd>Tab</kbd>Explore</span></div>`;
+  layer.append(backdrop, el);
+  backdrop.addEventListener('click', closePalette);
+  state.palette = { el, backdrop, query: initialQuery, highlight: 0, results: [] };
+  const input = el.querySelector('#pq');
+  input.value = initialQuery;
+  input.addEventListener('input', () => { state.palette.query = input.value; state.palette.highlight = 0; renderPaletteList(); });
+  renderPaletteList();
+  input.focus();
+}
+function renderPaletteList() {
+  const p = state.palette; const list = p.el.querySelector('.p-list');
+  p.results = paletteResults(p.query);
+  if (!p.results.length) { list.innerHTML = `<div class="p-empty">No results for “${esc(p.query)}”</div>`; return; }
+  let html = ''; let section = null;
+  p.results.forEach((it, i) => {
+    if (it.section !== section) {
+      section = it.section;
+      html += `<div class="p-sec"><span>${section.toUpperCase()}</span>${section === 'New tab' ? `<kbd>${MOD}T</kbd>` : ''}</div>`;
+    }
+    const lead = it.plugin ? `<span class="pi" style="--c:${it.plugin.color}">${icon(it.plugin.icon, 14)}</span>` : `<span class="gi">${icon(it.icon, 14)}</span>`;
+    html += `<div class="p-row" data-i="${i}">${lead}<span class="grow"><span class="lbl">${highlightLabel(it.label, p.query)}</span><span class="desc">${esc(it.desc)}</span></span><span class="act"></span></div>`;
+  });
+  list.innerHTML = html;
+  list.querySelectorAll('.p-row').forEach((row) => {
+    row.addEventListener('mousemove', () => { p.highlight = Number(row.dataset.i); updatePalette(); });
+    row.addEventListener('click', (e) => choosePalette(Number(row.dataset.i), modeFromEvent(e)));
+  });
+  updatePalette();
+}
+function updatePalette() {
+  const p = state.palette; if (!p) return;
+  const mode = currentMode();
+  const it = p.results[p.highlight];
+  p.el.querySelectorAll('.p-row').forEach((row, i) => {
+    const on = i === p.highlight; row.classList.toggle('hl', on);
+    row.querySelector('.act').innerHTML = on ? (it.kind === 'newtab' || it.plugin ? hintFor(mode) : `Go ${icon('LuCornerDownLeft', 13)}`) : '';
+  });
+  const key = mode === 'window' ? 'shift' : mode === 'background' ? 'mod' : 'none';
+  p.el.querySelectorAll('.p-foot span[data-m]').forEach((s) => s.classList.toggle('on', s.dataset.m === key));
+}
+function closePalette() {
+  const p = state.palette; if (!p) return;
+  state.palette = null; p.el.remove(); p.backdrop.remove();
+}
+function choosePalette(i, mode) {
+  const it = state.palette.results[i]; closePalette();
+  if (it?.kind === 'newtab') openPlugin(it.plugin, mode);
+}
+function paletteKey(e) {
+  const p = state.palette;
+  if (e.key === 'ArrowDown') { p.highlight = (p.highlight + 1) % p.results.length; updatePalette(); return true; }
+  if (e.key === 'ArrowUp') { p.highlight = (p.highlight - 1 + p.results.length) % p.results.length; updatePalette(); return true; }
+  if (e.key === 'Enter') { choosePalette(p.highlight, modeFromEvent(e)); return true; }
+  if (e.key === 'Escape') { closePalette(); return true; }
+  return false;
+}
+
+/* ---------------- global keys ---------------- */
+function syncModifiers(e) {
+  const next = { shift: e.shiftKey, mod: e.metaKey || e.ctrlKey };
+  if (next.shift !== state.modifiers.shift || next.mod !== state.modifiers.mod) { state.modifiers = next; updateMenu(); updatePalette(); }
+}
+window.addEventListener('keydown', (e) => {
+  syncModifiers(e);
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && !e.shiftKey && e.key.toLowerCase() === 't') {
+    e.preventDefault();
+    if (state.palette) closePalette();
+    if (state.menu) { closeMenu(); return; }
+    if (plugins.length === 1) openPlugin(plugins[0], 'tab'); else openMenu();
+    return;
+  }
+  if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); state.palette ? closePalette() : openPalette(); return; }
+  if (state.menu && menuKey(e)) { e.preventDefault(); return; }
+  if (state.palette && paletteKey(e)) { e.preventDefault(); }
+});
+window.addEventListener('keyup', syncModifiers);
+window.addEventListener('mousedown', (e) => {
+  if (state.menu && !state.menu.el.contains(e.target) && !e.target.closest('#newtab')) closeMenu({ restoreFocus: false });
+});
+
+// Screenshot helpers: freeze running animations at a time offset (ms).
+window.__mock = {
+  freezeAt(ms) { for (const a of document.getAnimations()) { a.pause(); a.currentTime = ms; } },
+  state,
+};
+renderMain();
+</script>
+</body>
+</html>

@@ -1,12 +1,13 @@
-import { StrictMode } from 'react';
+import { StrictMode, useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Link, Outlet } from 'react-router-dom';
+import { RouterProvider } from 'react-router/dom';
 import { DevProcessStatus, DevServerState } from '@omniviewdev/runtime/models';
 import { PluginWindow } from '@omniviewdev/runtime';
 import { PluginServiceProvider } from './PluginServiceProvider';
-import { RouteProvider } from '../../router/RouteProvider';
+import { usePageRoutes } from '../../workspace/pageRoutes';
+import { PageTabRouters, routerPathOf } from '../../workspace/tabRouters';
 import { devToolsChannel } from '../../devtools/events';
 import { createDeferred, createTestDeps } from '../testing/helpers';
 import type { PluginServiceDeps } from '../core/types';
@@ -17,6 +18,8 @@ import type * as RuntimeCore from '@omniviewdev/runtime/runtime';
 const backend = vi.hoisted(() => ({
   listPlugins: vi.fn(),
   listServers: vi.fn(),
+  restart: vi.fn(),
+  openSettings: vi.fn(),
   deps: null as PluginServiceDeps | null,
 }));
 vi.mock('@omniviewdev/runtime/api', async (importOriginal) => {
@@ -24,7 +27,7 @@ vi.mock('@omniviewdev/runtime/api', async (importOriginal) => {
   return {
     ...original,
     PluginManager: { ...original.PluginManager, ListPlugins: backend.listPlugins },
-    DevServerManager: { ...original.DevServerManager, ListDevServerStates: backend.listServers },
+    DevServerManager: { ...original.DevServerManager, ListDevServerStates: backend.listServers, RestartDevServer: backend.restart },
   };
 });
 vi.mock('@omniviewdev/runtime/runtime', async (importOriginal) => {
@@ -40,20 +43,61 @@ vi.mock('@omniviewdev/runtime/runtime', async (importOriginal) => {
     },
   };
 });
+vi.mock('../../../../packages/omniviewdev-runtime/src/bindings/github.com/omniviewdev/omniview/backend/window/service', () => ({
+  OpenSettings: backend.openSettings,
+}));
 vi.mock('../../../../packages/omniviewdev-runtime/src/bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/servicewrapper', () => ({
   GetPluginMeta: async () => ({ id: 'kubernetes', name: 'Kubernetes' }),
 }));
-vi.mock('../../../../packages/omniviewdev-runtime/src/bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/settings/servicewrapper', () => ({
-  PluginValues: async () => ({}),
+vi.mock('../../../../packages/omniviewdev-runtime/src/bindings/github.com/omniviewdev/omniview/backend/pkg/settings/binding', () => ({
+  GetSnapshot: async (scope: { kind: string; pluginId?: string }) => ({ scope, categories: {} }),
 }));
 vi.mock('../adapters/createProductionDeps', () => ({ createProductionDeps: () => backend.deps }));
-vi.mock('../../router/routes', () => ({
-  coreRoutes: [{
-    path: '/',
-    Component: () => <main><Link to="/settings">Settings</Link><Outlet /></main>,
-    children: [{ path: 'settings', Component: () => <h1>Settings</h1> }],
-  }],
-}));
+vi.mock('@/pages/home', () => ({ default: () => <h1>Home</h1> }));
+vi.mock('@/pages/plugins', () => ({ default: () => <h1>Plugins</h1> }));
+vi.mock('@/pages/plugins/InstalledPlugins', () => ({ default: () => null }));
+vi.mock('@/pages/plugins/PluginDetails', () => ({ default: () => null }));
+
+const TAB_ID = 'tab';
+let startPath = '/_plugin/kubernetes';
+let tabRouters: PageTabRouters | null = null;
+
+/** One page tab, as a workspace pane renders it: a memory router rebuilt in place when plugin routes change. */
+function SingleTabWorkspace() {
+  const routes = usePageRoutes();
+  const [routers] = useState(() => new PageTabRouters(routes, () => undefined));
+  const router = useSyncExternalStore(routers.subscribe, () => routers.get(TAB_ID));
+  useEffect(() => {
+    tabRouters = routers;
+    routers.setRoutes(routes);
+  }, [routers, routes]);
+  useLayoutEffect(() => {
+    routers.ensure(TAB_ID, startPath);
+  }, [routers]);
+
+  return (
+    <main>
+      <button
+        type="button"
+        onClick={() => {
+          void router?.navigate('/settings');
+        }}
+      >
+        Settings
+      </button>
+      {router && <RouterProvider router={router} />}
+    </main>
+  );
+}
+
+function currentTabPath(): string {
+  const router = tabRouters?.get(TAB_ID);
+  if (!router) {
+    throw new Error('the tab has no router');
+  }
+
+  return routerPathOf(router.state.location);
+}
 
 function server(viteStatus: DevProcessStatus) {
   return new DevServerState({ pluginID: 'kubernetes', vitePort: 15173, viteStatus });
@@ -63,7 +107,7 @@ function renderWorkspace() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   render(
     <QueryClientProvider client={client}>
-      <PluginServiceProvider><RouteProvider /></PluginServiceProvider>
+      <PluginServiceProvider><SingleTabWorkspace /></PluginServiceProvider>
     </QueryClientProvider>,
   );
   return client;
@@ -86,12 +130,14 @@ describe('plugin startup navigation', () => {
     backend.deps = testDeps.deps;
     backend.listPlugins.mockReset().mockResolvedValue([{ id: 'kubernetes', devMode: true }]);
     backend.listServers.mockReset().mockResolvedValue([server(DevProcessStatus.DevProcessStatusStarting)]);
-    window.location.hash = '#/_plugin/kubernetes';
+    backend.restart.mockReset().mockResolvedValue(undefined);
+    backend.openSettings.mockReset().mockResolvedValue('settings');
+    startPath = '/_plugin/kubernetes';
+    tabRouters = null;
   });
 
   afterEach(() => {
     cleanup();
-    window.location.hash = '';
   });
 
   it('shows progress and opens automatically when a delayed dev server becomes ready', async () => {
@@ -116,17 +162,17 @@ describe('plugin startup navigation', () => {
     });
 
     expect(await screen.findByRole('heading', { name: 'Kubernetes clusters' })).toBeVisible();
-    expect(window.location.hash).toBe('#/_plugin/kubernetes');
+    expect(currentTabPath()).toBe('/_plugin/kubernetes');
   });
 
   it('loads from an already-ready snapshot without waiting for another event', async () => {
     backend.listServers.mockResolvedValue([server(DevProcessStatus.DevProcessStatusReady)]);
     testDeps.importer.register('kubernetes', pluginModule());
-    window.location.hash = '#/_plugin/kubernetes/cluster/early';
+    startPath = '/_plugin/kubernetes/cluster/early';
     renderWorkspace();
 
     expect(await screen.findByRole('heading', { name: 'Cluster details' })).toBeVisible();
-    expect(window.location.hash).toBe('#/_plugin/kubernetes/cluster/early');
+    expect(currentTabPath()).toBe('/_plugin/kubernetes/cluster/early');
   });
 
   it('renders repaired plugin routes after the provider remounts over the same extension registry', async () => {
@@ -145,7 +191,7 @@ describe('plugin startup navigation', () => {
     renderWorkspace();
 
     expect(await screen.findByRole('heading', { name: 'Repaired plugin' })).toBeVisible();
-    expect(window.location.hash).toBe('#/_plugin/kubernetes');
+    expect(currentTabPath()).toBe('/_plugin/kubernetes');
     expect(testDeps.extensions.getExtensionPoint('kubernetes/cluster/page')).toBeDefined();
   });
 
@@ -189,7 +235,7 @@ describe('plugin startup navigation', () => {
     render(
       <StrictMode>
         <QueryClientProvider client={client}>
-          <PluginServiceProvider><RouteProvider /></PluginServiceProvider>
+          <PluginServiceProvider><SingleTabWorkspace /></PluginServiceProvider>
         </QueryClientProvider>
       </StrictMode>,
     );
@@ -203,9 +249,16 @@ describe('plugin startup navigation', () => {
     testDeps.importer.register('kubernetes', () => {
       throw new Error('Plugin entry unavailable'); 
     });
-    renderWorkspace();
+    const client = renderWorkspace();
 
-    expect(await screen.findByText('Plugin entry unavailable')).toBeVisible();
+    await waitFor(() => {
+      expect(screen.getByText('Plugin entry unavailable')).toBeVisible();
+    });
+    // A refreshed inventory must leave failed imports available for recovery.
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ['plugins'] });
+    });
+    expect(screen.getByText('Plugin entry unavailable')).toBeVisible();
     testDeps.importer.register('kubernetes', pluginModule());
     await act(async () => {
       screen.getByRole('button', { name: action }).click();
@@ -225,19 +278,121 @@ describe('plugin startup navigation', () => {
     expect(testDeps.importer.importCount).toBe(0);
   });
 
+  it.each(['Stopped', 'Failed', 'BuildFailed'])('shows %s inventory without a dev server and exposes recovery tools', async (phase) => {
+    backend.listPlugins.mockResolvedValue([{ id: 'kubernetes', devMode: true, phase }]);
+    backend.listServers.mockResolvedValue([]);
+    renderWorkspace();
+    expect(await screen.findByRole('heading', { name: 'Unable to load kubernetes' })).toBeVisible();
+    expect(screen.getByRole('alert')).toBeVisible();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(testDeps.importer.importCount).toBe(0);
+    expect(screen.getByRole('button', { name: 'Restart dev server' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Open build output' })).toBeVisible();
+  });
+
+  it('does not offer development recovery for failed production inventory', async () => {
+    backend.listPlugins.mockResolvedValue([{ id: 'kubernetes', devMode: false, phase: 'BuildFailed' }]);
+    backend.listServers.mockResolvedValue([]);
+    const pendingImport = createDeferred<PluginModule>();
+    testDeps.importer.register('kubernetes', async () => pendingImport.promise);
+    renderWorkspace();
+    expect(await screen.findByRole('heading', { name: 'Unable to load kubernetes' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Restart dev server' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open build output' })).not.toBeInTheDocument();
+  });
+
+  it('preserves inventory failure details when server discovery also fails', async () => {
+    backend.listPlugins.mockResolvedValue([{ id: 'kubernetes', devMode: true, phase: 'BuildFailed', lastError: 'Compiler rejected resource handler' }]);
+    backend.listServers.mockRejectedValue(new Error('Server discovery unavailable'));
+    renderWorkspace();
+    expect(await screen.findByText('Compiler rejected resource handler')).toBeVisible();
+    expect(screen.queryByText('Server discovery unavailable')).not.toBeInTheDocument();
+  });
+
+  it('reports restart rejection without needing a backend status event', async () => {
+    backend.listPlugins.mockResolvedValue([{ id: 'kubernetes', devMode: true, phase: 'Stopped' }]);
+    backend.listServers.mockResolvedValue([]);
+    backend.restart.mockRejectedValue(new Error('Workspace selection changed'));
+    renderWorkspace();
+    const button = await screen.findByRole('button', { name: 'Restart dev server' });
+    await act(async () => {
+      button.click();
+    });
+    expect(await screen.findByText('Workspace selection changed')).toBeVisible();
+    expect(button).toBeEnabled();
+  });
+
+  it('waits for an absent server while inventory is starting, then loads on readiness', async () => {
+    backend.listPlugins.mockResolvedValue([{ id: 'kubernetes', devMode: true, phase: 'Starting' }]);
+    backend.listServers.mockResolvedValue([]);
+    testDeps.importer.register('kubernetes', pluginModule());
+    renderWorkspace();
+
+    expect(await screen.findByText(/Waiting for the plugin development server/)).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(testDeps.importer.importCount).toBe(0);
+    await act(async () => {
+      devToolsChannel.emit('onStatusChange', server(DevProcessStatus.DevProcessStatusReady));
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Kubernetes clusters' })).toBeVisible();
+  });
+
+  it('clears failed inventory feedback during recovery and loads at the same URL', async () => {
+    backend.listPlugins.mockResolvedValue([{
+      id: 'kubernetes', devMode: true, phase: 'Failed', lastError: 'Plugin handshake failed',
+    }]);
+    backend.listServers.mockResolvedValue([]);
+    testDeps.importer.register('kubernetes', pluginModule());
+    renderWorkspace();
+    await screen.findByText('Plugin handshake failed');
+
+    backend.listPlugins.mockResolvedValue([{
+      id: 'kubernetes', devMode: true, phase: 'Starting', lastError: '',
+    }]);
+    await act(async () => {
+      testDeps.eventBus.emit('plugin/inventory_changed', { id: 'kubernetes' });
+    });
+    expect(await screen.findByText(/Waiting for the plugin development server/)).toBeVisible();
+    expect(screen.queryByText('Plugin handshake failed')).not.toBeInTheDocument();
+    await act(async () => {
+      devToolsChannel.emit('onStatusChange', server(DevProcessStatus.DevProcessStatusReady));
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Kubernetes clusters' })).toBeVisible();
+    expect(currentTabPath()).toBe('/_plugin/kubernetes');
+  });
+
+  it('accepts server readiness before stale stopped inventory refreshes', async () => {
+    backend.listPlugins.mockResolvedValue([{ id: 'kubernetes', devMode: true, phase: 'Stopped' }]);
+    backend.listServers.mockResolvedValue([]);
+    testDeps.importer.register('kubernetes', pluginModule());
+    renderWorkspace();
+    await screen.findByRole('alert');
+    await act(async () => {
+      devToolsChannel.emit('onStatusChange', server(DevProcessStatus.DevProcessStatusReady));
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Kubernetes clusters' })).toBeVisible();
+  });
+
   it.each(['/_plugin/not-installed', '/_plugin/kubernetes/not-a-page'])(
     'shows not-found feedback for %s',
     async (path) => {
       backend.listServers.mockResolvedValue([server(DevProcessStatus.DevProcessStatusReady)]);
       testDeps.importer.register('kubernetes', pluginModule());
-      window.location.hash = `#${path}`;
+      startPath = path;
       renderWorkspace();
 
-      expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeVisible();
+      // Registering the installed plugin replaces the tab router and may run
+      // loaders before the final not-found page commits.
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { name: 'Page not found' })).toBeVisible();
+      });
     },
   );
 
-  it('keeps core navigation responsive while a plugin import is pending', async () => {
+  it('opens native Settings while a plugin import is pending without replacing that page', async () => {
     backend.listServers.mockResolvedValue([server(DevProcessStatus.DevProcessStatusReady)]);
     const imported = createDeferred<PluginModule>();
     testDeps.importer.register('kubernetes', async () => imported.promise);
@@ -245,15 +400,16 @@ describe('plugin startup navigation', () => {
     await screen.findByRole('status');
 
     await act(async () => {
-      screen.getByRole('link', { name: 'Settings' }).click();
+      screen.getByRole('button', { name: 'Settings' }).click();
     });
-    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeVisible();
+    expect(backend.openSettings).toHaveBeenCalledWith('');
+    expect(currentTabPath()).toBe('/_plugin/kubernetes');
     await act(async () => {
       imported.resolve(pluginModule());
     });
 
-    expect(screen.getByRole('heading', { name: 'Settings' })).toBeVisible();
-    expect(window.location.hash).toBe('#/settings');
+    expect(await screen.findByRole('heading', { name: 'Kubernetes clusters' })).toBeVisible();
+    expect(currentTabPath()).toBe('/_plugin/kubernetes');
   });
 
   it('loads a committed replacement after the previous module failed at the same URL', async () => {
@@ -282,7 +438,7 @@ describe('plugin startup navigation', () => {
     });
 
     expect(await screen.findByRole('heading', { name: 'Reinstalled plugin' })).toBeVisible();
-    expect(window.location.hash).toBe('#/_plugin/kubernetes');
+    expect(currentTabPath()).toBe('/_plugin/kubernetes');
   });
 
   it('keeps a committed replacement when the previous startup import finishes later', async () => {
@@ -373,7 +529,7 @@ describe('plugin startup navigation', () => {
     });
 
     expect(await screen.findByRole('heading', { name: 'Latest committed plugin' })).toBeVisible();
-    expect(window.location.hash).toBe('#/_plugin/kubernetes');
+    expect(currentTabPath()).toBe('/_plugin/kubernetes');
   });
 
   it('discovers committed inventory without a mounted management screen', async () => {

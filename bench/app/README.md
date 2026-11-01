@@ -5,6 +5,10 @@ with the Wails backend faked inside the page. Where `bench/render` measures sing
 mounted in isolation, this measures the app as a user drives it: startup, plugin loading,
 routing, and the screens running inside the full shell.
 
+The whole-app fixture registers a `main` workspace window and implements its
+runtime name and state calls. Startup resolves window identity before rendering;
+generic no-op window answers prevent the startup-ready marker from firing.
+
 ```bash
 pnpm bench:app                         # build, then 5 runs of every scenario (~3 min)
 pnpm bench:app --runs 3 --only pods    # some scenarios
@@ -15,17 +19,45 @@ node bench/app/report.mjs              # Markdown summary of results/latest.json
 
 Also `task perf:app -- <args>`. First run locally: `pnpm install --frozen-lockfile`,
 `task packages` (providers → runtime → Vite plugin) and
-`pnpm exec playwright install chromium`. The plugin must use the current base-ui/
-editors shared-dependency cohort; the historical bundled submodule is not a
-compatible source for this host.
+`pnpm exec playwright install chromium`. The pinned Kubernetes submodule consumes
+the published base-ui 0.8.0, editors 6.1.0, and runtime/Vite-plugin 0.9.0 cohort.
+Older plugin archives built against MUI or legacy UI contracts are incompatible.
+
+The Logs scenario selects a container from the opened Logs submenu, not from the
+parent action list. Adding actions such as Debug must not change which workload
+is measured; line counts, scrolling, drawer toggles, and run counts stay unchanged.
+
+The Pod scenario opens the native page from a 5k-pod corpus, then scrolls up to
+30 viewport steps within that page. Current V2 Kubernetes requests 256 records per native page. Fixtures
+honor that bound and return real next cursors; they do not return the full corpus
+as one page. Older full-list baseline timings are not comparable. The shared
+browser bridge dispatches both named V2 calls and generated binding IDs.
+Scroll workloads stop at the real positive scroll boundary, reject no-op steps and
+unexpected end positions, and verify the reset. Reports expose actual forward steps
+and total steps (including the reset); wall and busy per-step timings use that
+actual total rather than the requested 30-step budget.
 
 ## Reproducible source cohort
 
-CI requires `OMNIVIEW_APP_PROFILE_UI_REF` and
-`OMNIVIEW_APP_PROFILE_KUBERNETES_REF` repository variables containing independently
-reviewed, public full commits. It checks those sources out explicitly, rather
-than changing the bundled submodule or waiting for an unpublished host npm release.
-The host input is the exact checked-out PR commit.
+CI reads the checked-out host's `e2e/source-cohort.json`, with full commit strings
+for `plugin-sdk`, `ui`, and `kubernetes`. UI and Kubernetes checkouts use validated
+cohort outputs; Kubernetes must match the host's `plugins/kubernetes` gitlink.
+The SDK entry must equal the independently reviewed repository variable
+`OMNIVIEW_RESOURCE_V2_REVIEWED_SDK_REVISION`. A branch cannot approve its own
+SDK change. The original isolation ancestry minimum remains
+`5b3ef764d1cf738835a723a749a0cb6c45f85e44`. The profiling release advances the
+reviewed isolation checkpoint to SDK v0.11.0,
+`eb0d5c8c533c6501c4a57da338435956f82d7b84`, after independent security review of
+the five protected files. The delta only adds the opt-in profiler lifecycle to
+`pkg/sdk/plugin.go`; state-root, profile-contract, and store protections remain
+unchanged. Admission requires the baseline to precede that pinned checkpoint, the
+checkpoint to precede the selected SDK, and all five selected protected files
+to match the checkpoint byte-for-byte. Neither cohort approval, tags nor
+environment variables can substitute another isolation checkpoint.
+Review selected commits before updating the branch-owned cohort and
+gitlink; checkout reachability is required, publication is not. This avoids global UI/Kubernetes ref changes when older `main` and an
+upgraded PR need different compatible sources. The host input remains the exact
+checked-out PR commit, or selected branch commit for manual dispatch.
 
 The source builder reuses canonical workspace `Init`/`Create`/`Link`, native pnpm
 12.14.0, the actual protocol-probe report, and the existing JavaScript build graph
@@ -61,12 +93,41 @@ its base-ui peer range is `^0.2.1`, not the host source runtime's `~0.4.3`.
 
 With installed/built host packages and the reviewed sources checked out:
 
+Candidate CI uses `e2e/source-cohort.json` as its exact SDK/UI/Kubernetes
+selection. `OMNIVIEW_RESOURCE_V2_REVIEWED_SDK_REVISION` must equal that SDK commit;
+UI and Kubernetes refs come only from that cohort in candidate workflows, not
+legacy repository UI/profile variables. The selected UI commit is
+`cd50e0d0663c1d416ed48c147382a5040d6c3c7c`, with base-ui 0.9.0 and editor 6.1.1,
+matching the current host dependency ranges. Do not change legacy repository
+variables to approve candidate sources. Explicit direct-CLI `UI_SOURCE_REF` or
+`KUBERNETES_SOURCE_REF` values must still match the selected cohort.
+The Kubernetes gitlink must also match. Commits must be reachable by checkout,
+but candidate testing does not require a module or npm publication.
+The candidate workflows map this dedicated repository variable to their internal
+`REVIEWED_SDK_REVISION` environment variable. They never fall back to
+`OMNIVIEW_E2E_REVIEWED_SDK_REVISION`. Keep that legacy variable unchanged while
+stable `main` still consumes the earlier SDK; candidate approval must not change
+unrelated pre-merge CI. Configure the new variable only after independent review.
+An absent repository-level legacy variable does not prove that no effective
+organization-level variable exists.
+The independent SDK isolation-core baseline remains
+`5b3ef764d1cf738835a723a749a0cb6c45f85e44`; candidate approval does not
+authorize protected isolation changes or replace review with release-tag trust.
+PR validation runs for stacked PR bases as well as `main`, with read-only
+permissions. Release and nightly workflows retain published dependencies.
+
+Prepare the effective host module with the selected SDK before running the
+probe or builder; keep the generated modfile outside the source checkout:
+
 ```bash
+HOST_MODFILE="$(GOWORK=off GOFLAGS= go run ./scripts/hostmod/main.go \
+  --root "$PWD" --sdk-source "$SDK_SOURCE")"
 A11_PROTOCOL_PROBE=1 A11_PROTOCOL_REPORT=/absolute/path/link-protocol.json \
-  GOWORK=off GOFLAGS= go test -tags server ./internal/devworkspace \
+  GOWORK=off GOFLAGS= go test -mod=readonly -modfile="$HOST_MODFILE" -tags server ./internal/devworkspace \
   -run '^TestLinkPinnedProtocolProbe$' -count=1
-GOWORK=off GOFLAGS= go run -tags server ./bench/app/build-plugin \
+GOWORK=off GOFLAGS= go run -mod=readonly -modfile="$HOST_MODFILE" -tags server ./bench/app/build-plugin \
   --host \"$PWD\" --host-ref \"$(git rev-parse HEAD)\" \
+  --sdk "$SDK_SOURCE" --sdk-ref "$REVIEWED_SDK_COMMIT" \
   --ui /absolute/path/ui --ui-ref \"$REVIEWED_UI_COMMIT\" \
   --kubernetes /absolute/path/kubernetes --kubernetes-ref \"$REVIEWED_KUBERNETES_COMMIT\" \
   --link-evidence /absolute/path/link-protocol.json -- --runs 3
@@ -109,8 +170,8 @@ the collection and report its path instead of deleting uncertain files.
 |---|---|
 | `cold-start` | Fresh browser context, no plugins installed, until the startup marker. |
 | `cold-start-k8s` | As above with the kubernetes plugin; also until the plugin's home card shows. |
-| `pods` | `open`: from the home page, navigate to the Pod list of a 5,000-pod cluster until a row shows. `scroll`: 30 one-viewport steps down, then back to top, each waiting for a painted frame. |
-| `logs` | `open`: Pod row menu → Logs, until the viewer shows. `stream`: 10,000 lines in batches of 100, one batch per task, until the line counter reaches 10,000. `scroll`: 30 pages of the log viewer. `drawer`: minimize/expand the bottom drawer 10 times. |
+| `pods` | `open`: from the home page, open the native Pod page from a 5,000-pod corpus until a row shows. `scroll`: up to 30 viewport steps within the native page, then back to top, each waiting for a painted frame. |
+| `logs` | `open`: Pod row menu → Logs, until the viewer shows. `stream`: 10,000 lines in batches of 100, one batch per task, until the line counter reaches 10,000. `scroll`: up to 30 viewport steps within the available log buffer, then back to top. `drawer`: minimize/expand the bottom drawer 10 times. |
 
 Every scenario runs once as a discarded warmup, then `--runs` times, each in a new browser
 context.
@@ -325,3 +386,28 @@ root remount leaves the new source active. Its fixture stderr observations are
 correlated within the authenticated provider process lifetime, followed by
 canonical down/unlink and sampler retirement. This is not a new latency run and
 does not change or relabel the preserved historical baseline above.
+
+## Kubernetes resource cost and native idle CPU
+
+The [2026-10-29 investigation](../../docs/kubernetes-performance-investigation-2026-10-29.md)
+records staged fixes, FreeLens source comparisons, SDK-v2 carry-forward requirements,
+raw receipts, and unresolved native acceptance work.
+
+```bash
+# Actual runtime reducer, synthetic fixtures; no browser/native CPU claim.
+node bench/app/resource-batch.mjs /tmp/resource-batch.json
+
+# Explicit native PIDs; preserve cluster/build/route provenance separately.
+node bench/app/native-idle.mjs \
+  --pid host="$APP_PID" --pid webcontent="$WEB_PID" --pid graphics="$GPU_PID" \
+  --seconds 60 --scenario dashboard-idle-run-1 --out /tmp/dashboard-idle.json
+```
+
+The reducer runner accepts an optional second positional argument naming an original
+source snapshot for before/after comparison. It records the exact input source hash
+before bundling. The native sampler uses cumulative process CPU time rather than
+the rolling `%CPU` field, checks start identity in each CPU snapshot, and rejects
+exited PIDs or processes younger than two seconds. This age guard avoids the
+same-second ambiguity of `ps` start timestamps.
+Neither tool selects or mutates a cluster. Do not use an uncontrolled sampler smoke
+or a reducer speedup as evidence of lower native Graphics/WebContent CPU.

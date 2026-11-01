@@ -1,7 +1,6 @@
 import React from 'react';
 import { Spinner, StatusBar } from '@omniviewdev/base-ui';
 import {
-  LuPlug,
   LuBell,
   LuHammer,
   LuSquare,
@@ -23,10 +22,12 @@ import { getAggregateStatus } from '@/features/devtools/types';
 import { useDevServer } from '@/hooks/plugin/useDevServer';
 import { usePluginService } from '@/features/plugins';
 import { usePortForwardSessions, useOperations, useSnackbar } from '@omniviewdev/runtime';
-import type { Operation } from '@omniviewdev/runtime';
+import type { BackgroundOperation } from '@omniviewdev/runtime';
 import HintTooltip from '@/components/base/HintTooltip';
 
 import ConnectionStatusIndicator from './ConnectionStatusIndicator';
+import InstanceIndicator from './InstanceIndicator';
+import HostProfilingIndicator from '@/features/profiling/HostProfilingIndicator';
 import {
   Dot,
   FooterChip,
@@ -37,7 +38,6 @@ import {
   PopoverHeader,
   cx,
   footerStyles as styles,
-  type FooterTone,
 } from './parts';
 
 // ---------------------------------------------------------------------------
@@ -162,9 +162,9 @@ function DevServerChip({ pluginId, state }: { pluginId: string; state: DevServer
       tooltip={tooltipText}
       width='narrow'
       trigger={
-        <FooterTrigger>
-          <span className={styles.Truncate}>{pluginId}</span>
+        <FooterTrigger className={styles.StatusChip}>
           <Dot status={tone} pulse={aggStatus === 'building'} />
+          <span className={styles.Truncate}>{pluginId} · {STATUS_LABELS[aggStatus]}</span>
         </FooterTrigger>
       }
     >
@@ -184,17 +184,10 @@ function DevServerIndicators() {
     return null;
   }
 
-  const tone: FooterTone = summary.error > 0 ? 'danger' : summary.building > 0 ? 'warning' : 'success';
   const entries = Array.from(servers.entries());
 
   return (
     <>
-      <HintTooltip content={`${summary.total} dev server${summary.total !== 1 ? 's' : ''} active`} side='top'>
-        <span className={styles.Chip} data-tone={tone} tabIndex={-1}>
-          <LuPlug size={9} />
-          DEV
-        </span>
-      </HintTooltip>
       {entries.map(([pluginId, state]) => (
         <DevServerChip key={pluginId} pluginId={pluginId} state={state} />
       ))}
@@ -228,7 +221,7 @@ function PluginLoadingSpinner() {
     const cancelUpdateStart = Events.On(
       'plugin/update_started',
       (ev) => {
-        const payload = ev.data as { pluginID: string; version: string };
+        const payload = ev.data;
         setLoading((prev) => ({
           ...prev,
           [payload.pluginID]: `Updating plugin '${payload.pluginID}' to '${payload.version}'`,
@@ -496,8 +489,26 @@ function PortForwardIndicator() {
 // OperationsIndicator — chip + popover listing active/recent operations
 // ---------------------------------------------------------------------------
 
-function OperationsList({ operations, onRemove }: { operations: Operation[]; onRemove: (id: string) => void }) {
+function OperationsList({ operations, onRemove }: { operations: BackgroundOperation[]; onRemove: (id: string) => void }) {
   const running = operations.filter((o) => o.status === 'running');
+  const [now, setNow] = React.useState<number | null>(null);
+  const hasRunning = running.length > 0;
+  React.useEffect(() => {
+    if (!hasRunning) {
+      return;
+    }
+
+    const updateClock = () => {
+      setNow(Date.now());
+    };
+
+    const initialTimer = window.setTimeout(updateClock, 0);
+    const timer = window.setInterval(updateClock, 1000);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(timer);
+    };
+  }, [hasRunning]);
 
   return (
     <>
@@ -508,7 +519,7 @@ function OperationsList({ operations, onRemove }: { operations: Operation[]; onR
       <div className={styles.List}>
         {operations.length === 0 && <div className={styles.Empty}>No recent operations</div>}
         {operations.map((op) => {
-          const elapsed = Math.round(((op.completedAt ?? Date.now()) - op.startedAt) / 1000);
+          const elapsed = Math.max(0, Math.round(((op.completedAt ?? now ?? op.startedAt) - op.startedAt) / 1000));
           const status = op.status === 'completed' ? 'success' : op.status === 'error' ? 'danger' : 'warning';
           return (
             <div key={op.id} className={styles.ListItem}>
@@ -576,12 +587,14 @@ export default function AppStatusFooter() {
   return (
     <StatusBar data-testid='app-footer' size='sm' className={styles.Bar}>
       <StatusBar.Section align='start'>
+        <InstanceIndicator />
         <DevServerIndicators />
         <FailedPluginIndicator />
         <PortForwardIndicator />
         <OperationsIndicator />
       </StatusBar.Section>
       <StatusBar.Section align='end'>
+        <HostProfilingIndicator />
         <ConnectionStatusIndicator />
         <PluginLoadingSpinner />
         <StatusBar.Separator />

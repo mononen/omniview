@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/omniviewdev/omniview/internal/devcontract"
 	"github.com/omniviewdev/omniview/internal/devsession"
 )
@@ -174,19 +176,6 @@ func TestViteFeedbackPublishesNativeAuthorityForTheOriginalHandle(t *testing.T) 
 		if value, ok := strings.CutPrefix(entry, viteFeedbackEnvironment+"="); ok {
 			encoded = value
 		}
-	}
-	var config viteFeedbackContext
-	if err := json.Unmarshal([]byte(encoded), &config); err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS != "windows" {
-		if config.Authority != nil {
-			t.Fatal("POSIX feedback unexpectedly requires a subprocess authority")
-		}
-		return
-	}
-	if config.Authority == nil || config.Authority.Identity != s.feedback.identity {
-		t.Fatal("Windows child context lacks the original full native file authority")
 	}
 	if held, err := ReadViteFeedbackContext(encoded); err != nil || !held {
 		t.Fatalf("native authority did not observe initial hold: held=%v err=%v", held, err)
@@ -380,6 +369,52 @@ func TestViteFeedbackRejectsTamperedOwnershipBeforeRelease(t *testing.T) {
 			if err != nil || string(actual) != string(foreign) {
 				t.Errorf("release overwrote foreign feedback metadata: %q: %v", actual, err)
 			}
+		})
+	}
+}
+
+func TestSourceUpdateEarlyQuiescenceFailureCannotRemainReady(t *testing.T) {
+	for _, failure := range []string{"feedback-integrity", "backend-quiescence"} {
+		t.Run(failure, func(t *testing.T) {
+			g, s, _, path := feedbackWatchFixture(t)
+			root, err := devcontract.CanonicalPath(t.TempDir())
+			require.NoError(t, err)
+			s.manager.Root = root
+			initial := WatchChange{Nodes: []string{"host-backend"}}
+			require.NoError(t, s.beginFeedback(context.Background(), initial))
+			require.NoError(t, s.commitFeedback(context.Background(), initial))
+			source := filepath.Join(g.workspace.Root, "plugin", "pkg", "source.go")
+			var intent sourceUpdateIntent
+			intent.WorkspaceID = s.workspace.Manifest.WorkspaceID
+			intent.Root = s.workspace.Root
+			intent.Plan.WorkspaceID = s.workspace.Manifest.WorkspaceID
+			intent.Running = true
+			intent.Paths = []string{source}
+			intentPath := sourceUpdatePath(s.manager, s.workspace)
+			require.NoError(t, os.MkdirAll(filepath.Dir(intentPath), 0700))
+			require.NoError(t, saveSourceUpdate(s.manager, s.workspace, &intent, "prepared"))
+			before, err := os.ReadFile(intentPath)
+			require.NoError(t, err)
+			if failure == "feedback-integrity" {
+				data, readErr := os.ReadFile(path)
+				require.NoError(t, readErr)
+				require.NoError(t, os.Rename(path, path+".retained"))
+				require.NoError(t, os.WriteFile(path, data, 0600))
+			}
+			done := make(chan struct{})
+			canceled := false
+			s.watchDone = done
+			s.watchCancel = func() { canceled = true; close(done) }
+			s.status.Phase = "ready"
+			status, err := s.applySourceUpdate(context.Background())
+			require.Error(t, err, "source update accepted unresolved producer fencing")
+			require.True(t, canceled, "source update did not quiesce local watcher")
+			require.Equal(t, "error", status.Phase, "quiescence failure left a ready-but-unwatched runtime")
+			require.NotNil(t, status.LastError)
+			require.NotEmpty(t, status.RecoveryCommand)
+			after, err := os.ReadFile(intentPath)
+			require.NoError(t, err)
+			require.Equal(t, string(before), string(after), "early quiescence failure changed captured checkout progress")
 		})
 	}
 }

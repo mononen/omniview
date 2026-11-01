@@ -1,6 +1,12 @@
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Publish npm packages only (for example v0.9.0); desktop still requires a v* tag"
+        required: true
+        type: string
   push:
     tags:
       - "v*"
@@ -15,7 +21,7 @@ concurrency:
 env:
   NODE_OPTIONS: "--max-old-space-size=4096"
   GO_VERSION: "1.26"
-  NODE_VERSION: "24"
+  NODE_VERSION: "26.13.0"
   # Release jobs must not inherit a developer's workspace/module/tooling flags.
   GOWORK: "off"
   GOFLAGS: ""
@@ -32,6 +38,7 @@ jobs:
   # macOS (darwin/arm64, file name kept as "universal") — ad-hoc sign, DMG
   # ─────────────────────────────────────────────────────────────────────────────
   build-macos:
+    if: github.event_name == 'push'
     runs-on: macos-latest
     steps:
       - name: Normalize version
@@ -57,10 +64,9 @@ jobs:
           version: 12.14.0
           install: false
 
-      - name: Install dependencies and global TypeScript
+      - name: Install dependencies
         run: |
           pnpm install --frozen-lockfile
-          pnpm add --global typescript
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -162,6 +168,7 @@ jobs:
   # Linux (linux/amd64)
   # ─────────────────────────────────────────────────────────────────────────────
   build-linux:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Normalize version
@@ -193,10 +200,9 @@ jobs:
           version: 12.14.0
           install: false
 
-      - name: Install dependencies and global TypeScript
+      - name: Install dependencies
         run: |
           pnpm install --frozen-lockfile
-          pnpm add --global typescript
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -254,6 +260,7 @@ jobs:
   # Windows (windows/amd64)
   # ─────────────────────────────────────────────────────────────────────────────
   build-windows:
+    if: github.event_name == 'push'
     runs-on: windows-latest
     steps:
       - name: Normalize version
@@ -279,10 +286,9 @@ jobs:
           version: 12.14.0
           install: false
 
-      - name: Install dependencies and global TypeScript
+      - name: Install dependencies
         run: |
           pnpm install --frozen-lockfile
-          pnpm add --global typescript
 
       - name: Setup Go
         uses: actions/setup-go@v5

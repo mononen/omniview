@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -24,8 +24,8 @@ function script(block) {
   assert.ok(inline, 'step must expose its real executable shell contract');
   return inline[1];
 }
-function shell(block, env = {}) {
-  return spawnSync('/bin/bash', ['-e', '-o', 'pipefail', '-c', script(block)], { env: { ...toolEnvironment(process.env), ...env }, encoding: 'utf8' });
+function shell(block, env = {}, cwd) {
+  return spawnSync('/bin/bash', ['-e', '-o', 'pipefail', '-c', script(block)], { cwd, env: { ...toolEnvironment(process.env), ...env }, encoding: 'utf8' });
 }
 
 test('main primer skips native preparation only for all three exact lookup hits, never a fallback or missing output', () => {

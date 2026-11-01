@@ -1,7 +1,10 @@
-import { useQuery } from '@tanstack/react-query';
-import { GetRelated } from '../../bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/resource/graphservice';
-import type { GraphEdge, GraphNode } from '../../bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/resource/graph/models';
+import { skipToken, useQuery } from '@tanstack/react-query';
+import { GetRelated } from '../../resource/v2/graph-client';
+import { sameGraphNode, type GraphEdge, type GraphNode } from '../../resource/v2/graph';
+import type { AccessRoute, ResourceReference } from '../../resource/v2/domain';
 import { useResolvedPluginId } from '../useResolvedPluginId';
+import { useConnectionReadiness } from '../connection/useConnectionReadiness';
+import { useConnectionQueryGuard } from './useConnectionQueryGuard';
 import { useRefetchOnGraphChange } from './useRefetchOnGraphChange';
 
 /** Which side of the relationship the viewed resource is on. */
@@ -34,20 +37,8 @@ type UseRelatedResourcesOptions = {
    */
   pluginID?: string;
 
-  /** The connection ID the resource belongs to */
-  connectionID: string;
-
-  /**
-   * The resource key of the viewed resource
-   * @example "core::v1::Pod"
-   */
-  resourceKey: string;
-
-  /** The ID of the viewed resource */
-  resourceID: string;
-
-  /** Namespace of the viewed resource, if the backend has namespaces */
-  namespace?: string;
+  reference: ResourceReference;
+  route: AccessRoute;
 
   /** Which edges to return. Defaults to both directions. */
   direction?: RelationshipDirection | 'both';
@@ -92,21 +83,14 @@ export function relationshipLabel(type: string, direction: RelationshipDirection
   return direction === 'outgoing' ? words : `${words} (incoming)`;
 }
 
-function sameNode(a: GraphNode, b: GraphNode): boolean {
-  return a.pluginId === b.pluginId
-    && a.connectionId === b.connectionId
-    && a.resourceKey === b.resourceKey
-    && a.id === b.id
-    && (a.namespace ?? '') === (b.namespace ?? '');
-}
 
 /**
  * toRelatedResources converts graph edges around `self` into one entry per
  * edge, keyed by the resource at the other end.
  */
-export function toRelatedResources(self: GraphNode, edges: GraphEdge[]): RelatedResource[] {
+export function toRelatedResources(self: Omit<GraphNode, 'key'>, edges: GraphEdge[]): RelatedResource[] {
   return edges.map((edge) => {
-    const outgoing = sameNode(edge.source, self);
+    const outgoing = sameGraphNode(edge.source, self);
     return {
       resource: outgoing ? edge.target : edge.source,
       type: edge.type,
@@ -126,10 +110,8 @@ export function toRelatedResources(self: GraphNode, edges: GraphEdge[]): Related
  */
 export const useRelatedResources = ({
   pluginID: explicitPluginID,
-  connectionID,
-  resourceKey,
-  resourceID,
-  namespace = '',
+  reference,
+  route,
   direction = 'both',
   relationshipType,
   enabled = true,
@@ -137,24 +119,24 @@ export const useRelatedResources = ({
 }: UseRelatedResourcesOptions) => {
   const pluginID = useResolvedPluginId(explicitPluginID);
 
-  const queryKey = ['RESOURCE_RELATED', pluginID, connectionID, resourceKey, namespace, resourceID, direction, relationshipType ?? null];
-  const queryEnabled = enabled && !!pluginID && !!connectionID && !!resourceKey && !!resourceID;
+  const queryKey = ['RESOURCE_RELATED', pluginID, reference, route, direction, relationshipType ?? null];
+  const readiness = useConnectionReadiness({ pluginID, connectionID: route.connection, enabled: enabled && !!reference.address.id });
+  const guardQuery = useConnectionQueryGuard(pluginID, route.connection);
+  const queryEnabled = enabled && !!pluginID && !!route.connection && !!reference.address.id && readiness.phase === 'connected';
 
-  useRefetchOnGraphChange(pluginID, connectionID, queryKey, queryEnabled);
+  useRefetchOnGraphChange(pluginID, route.connection, queryKey, queryEnabled);
 
   const query = useQuery({
     queryKey,
-    queryFn: async () => GetRelated(pluginID, connectionID, resourceKey, namespace, resourceID, direction, relationshipType ?? null),
+    queryFn: queryEnabled ? ({ signal, queryKey }) => guardQuery(queryKey, signal, () => GetRelated(pluginID, reference, route, direction, relationshipType ?? null)) : skipToken,
     enabled: queryEnabled,
     refetchInterval,
   });
 
-  const self: GraphNode = {
+  const self: Omit<GraphNode, 'key'> = {
     pluginId: pluginID,
-    connectionId: connectionID,
-    resourceKey,
-    id: resourceID,
-    namespace,
+    reference,
+    route,
   };
   const edges = query.data ?? [];
 

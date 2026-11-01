@@ -18,6 +18,7 @@ import (
 	"github.com/omniviewdev/omniview/backend/pkg/terminal"
 	logging "github.com/omniviewdev/plugin-sdk/log"
 	"github.com/omniviewdev/plugin-sdk/pkg/config"
+	resourcev2 "github.com/omniviewdev/plugin-sdk/pkg/resource/v2"
 	sdktypes "github.com/omniviewdev/plugin-sdk/pkg/types"
 	"github.com/omniviewdev/plugin-sdk/pkg/v1/exec"
 	pkgsettings "github.com/omniviewdev/plugin-sdk/settings"
@@ -29,6 +30,7 @@ type Controller interface {
 	internaltypes.Controller
 	ServiceStartup(ctx context.Context, options application.ServiceOptions) error
 	ServiceShutdown() error
+	SetReferenceAdmitter(resource.ReferenceAdmitter)
 	GetPluginHandlers(plugin string) map[string]exec.Handler
 	GetHandlers() map[string]map[string]exec.Handler
 	GetHandler(plugin, resource string) *exec.Handler
@@ -54,7 +56,7 @@ type sessionIndex struct {
 func NewController(
 	logger logging.Logger,
 	sp pkgsettings.Provider,
-	resourceClient resource.Service,
+	resourceClient resource.ConnectionReader,
 ) Controller {
 	return &controller{
 		app:              nil,
@@ -94,8 +96,14 @@ type controller struct {
 	outputMux chan exec.StreamOutput
 	resizeMux chan exec.StreamResize
 
-	resourceClient  resource.Service
-	terminalManager *terminal.Manager
+	resourceClient    resource.ConnectionReader
+	referenceAdmitter resource.ReferenceAdmitter
+	terminalManager   *terminal.Manager
+}
+
+// SetReferenceAdmitter is configured by native composition before startup.
+func (c *controller) SetReferenceAdmitter(admit resource.ReferenceAdmitter) {
+	c.referenceAdmitter = admit
 }
 
 func (c *controller) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
@@ -291,11 +299,10 @@ func (c *controller) OnPluginStart(pluginID string, _ config.PluginMeta, backend
 
 	c.mu.Lock()
 	c.clients[pluginID] = provider
-	for _, handler := range handlers {
-		if _, ok := c.handlerMap[handler.Plugin]; !ok {
-			c.handlerMap[handler.Plugin] = make(map[string]exec.Handler)
-		}
-		c.handlerMap[handler.Plugin][handler.Resource] = handler
+	// Installation ownership is separate from the handler's canonical selector.
+	c.handlerMap[pluginID] = make(map[string]exec.Handler, len(handlers))
+	for i := range handlers {
+		c.handlerMap[pluginID][handlers[i].Resource] = handlers[i]
 	}
 	c.inChans[pluginID] = inchan
 	c.mu.Unlock()
@@ -334,16 +341,7 @@ func (c *controller) cleanupPluginLocked(pluginID string) (Provider, bool) {
 			delete(c.sessionIndex, sid)
 		}
 	}
-	for plugin, resources := range c.handlerMap {
-		for resKey, handler := range resources {
-			if handler.Plugin == pluginID {
-				delete(resources, resKey)
-			}
-		}
-		if len(resources) == 0 {
-			delete(c.handlerMap, plugin)
-		}
-	}
+	delete(c.handlerMap, pluginID)
 	return provider, ok
 }
 
@@ -500,9 +498,24 @@ func (c *controller) CreateSession(
 		attribute.String("plugin_id", plugin),
 		attribute.String("connection_id", connectionID),
 	)
+	if opts.Reference != nil {
+		if c.referenceAdmitter == nil {
+			return nil, resourcev2.NewError("UNSUPPORTED", "Resource reference admission is unavailable.")
+		}
+		if opts.Route == nil || opts.Route.Connection != connectionID {
+			return nil, resourcev2.NewError("INVALID_REQUEST", "Resource route does not match the selected connection.")
+		}
+		ctx, err = c.referenceAdmitter(ctx, "exec.CreateSession", plugin, *opts.Route, *opts.Reference)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	var session *exec.Session
 	if plugin == "local" {
+		if opts.HasResourceIntent() {
+			return nil, resourcev2.NewError("INVALID_REQUEST", "A local terminal cannot execute a resource request.")
+		}
 		// start local terminal
 		session, err = c.terminalManager.StartSession(
 			c.getUnconnectedCtx(ctx, plugin),

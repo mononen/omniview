@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
 import { useEditorSchemas } from '@omniviewdev/runtime';
+import { useEffect } from 'react';
 import { schemaRegistry } from './schemaRegistry';
 
 type UseSchemaRegistrationOptions = {
@@ -21,9 +21,10 @@ export const useSchemaRegistration = ({
   connectionID,
   enabled = true,
 }: UseSchemaRegistrationOptions) => {
-  const { schemas, isLoading, error } = useEditorSchemas({
+  const route = { connection: connectionID };
+  const { schemas, documents, isLoading, error } = useEditorSchemas({
     pluginID,
-    connectionID,
+    route,
     enabled,
   });
 
@@ -32,12 +33,12 @@ export const useSchemaRegistration = ({
       return;
     }
 
-    schemaRegistry.register(pluginID, connectionID, schemas);
+    schemaRegistry.register(pluginID, connectionID, schemas, documents);
 
     return () => {
       schemaRegistry.unregister(pluginID, connectionID);
     };
-  }, [schemas, pluginID, connectionID]);
+  }, [schemas, pluginID, connectionID, documents]);
 
   return { isLoading, error };
 };

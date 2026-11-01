@@ -1,4 +1,6 @@
 import { ReactNode } from "react";
+import type { AccessRoute, ResourceReference } from '../../resource/v2/domain';
+import type { HostRecord } from '../../resource/v2/host';
 
 /**
  * A factory function that produces a DrawerComponent for a given resource.
@@ -84,12 +86,13 @@ export type DrawerComponentAction<T = any> = {
 
   /**
    * The function to run for the drawer component on click.
+   * Async actions return a promise so renderers can report rejected operations.
    *
    * When a plugin is extending with an action, the component may choose to
    * pass data about what is inside the component. This is typically the case
    * with drawers that display resource information.
    */
-  action?: (ctx: DrawerContext<T>) => void
+  action?: (ctx: DrawerContext<T>) => void | Promise<unknown>
 
   /**
    * Have the action provide a list of actions underneath when clicked rather than
@@ -119,7 +122,7 @@ export type DrawerComponentActionListItem<T = any> = {
    * pass data about what is inside the component. This is typically the case
    * with drawers that display resource information.
    */
-  action: (ctx: DrawerContext<T>) => void
+  action: (ctx: DrawerContext<T>) => void | Promise<unknown>
 }
 
 /**
@@ -136,32 +139,16 @@ export type DrawerContext<T = any> = {
    * Resource information (if this drawer is being displayed as part of a resource)
    */
   resource?: {
-    /**
-     * The id of the resource in question
-     */
-    id: string;
-
-    /**
-     * A human-readable display name for the resource, shown in the drawer header.
-     */
+    reference: ResourceReference;
+    targetId: string;
+    route: AccessRoute;
+    representation: string;
+    /** Opaque host-minted address key, when supplied by the host. */
+    key?: string;
     name?: string;
-
-    /**
-     * The resource key that defines the globally-recognizable key
-     */
-    key: string;
-
-    /**
-    * A connection id, if this drawer is displaying something in the context
-    * of a connection.
-    */
-    connectionID: string;
-
-    /**
-     * The plugin that owns this resource. When provided, host-level features
-     * like the Events tab can be injected automatically.
-     */
-    pluginID?: string;
+    pluginID: string;
+    /** Original observed record, not a re-fetched replacement. */
+    record?: HostRecord;
   }
 }
 

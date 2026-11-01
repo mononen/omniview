@@ -1,7 +1,10 @@
-import { useQuery } from '@tanstack/react-query';
-import { GetDependencyTree } from '../../bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/resource/graphservice';
+import { skipToken, useQuery } from '@tanstack/react-query';
+import { GetDependencyTree } from '../../resource/v2/graph-client';
+import type { AccessRoute, ResourceReference } from '../../resource/v2/domain';
 import { useResolvedPluginId } from '../useResolvedPluginId';
 import { useRefetchOnGraphChange } from './useRefetchOnGraphChange';
+import { useConnectionReadiness } from '../connection/useConnectionReadiness';
+import { useConnectionQueryGuard } from './useConnectionQueryGuard';
 
 type UseDependencyTreeOptions = {
   /**
@@ -10,20 +13,8 @@ type UseDependencyTreeOptions = {
    */
   pluginID?: string;
 
-  /** The connection ID the resource belongs to */
-  connectionID: string;
-
-  /**
-   * The resource key of the root resource
-   * @example "apps::v1::Deployment"
-   */
-  resourceKey: string;
-
-  /** The ID of the root resource */
-  resourceID: string;
-
-  /** Namespace of the root resource, if the backend has namespaces */
-  namespace?: string;
+  reference: ResourceReference;
+  route: AccessRoute;
 
   /** How many edges deep to follow. The host caps this at 5. */
   maxDepth?: number;
@@ -46,24 +37,24 @@ type UseDependencyTreeOptions = {
  */
 export const useDependencyTree = ({
   pluginID: explicitPluginID,
-  connectionID,
-  resourceKey,
-  resourceID,
-  namespace = '',
+  reference,
+  route,
   maxDepth = 3,
   enabled = true,
   refetchInterval = false,
 }: UseDependencyTreeOptions) => {
   const pluginID = useResolvedPluginId(explicitPluginID);
 
-  const queryKey = ['RESOURCE_DEPENDENCY_TREE', pluginID, connectionID, resourceKey, namespace, resourceID, maxDepth];
-  const queryEnabled = enabled && !!pluginID && !!connectionID && !!resourceKey && !!resourceID;
+  const queryKey = ['RESOURCE_DEPENDENCY_TREE', pluginID, reference, route, maxDepth];
+  const readiness = useConnectionReadiness({ pluginID, connectionID: route.connection, enabled: enabled && !!reference.address.id });
+  const guardQuery = useConnectionQueryGuard(pluginID, route.connection);
+  const queryEnabled = enabled && !!pluginID && !!route.connection && !!reference.address.id && readiness.phase === 'connected';
 
-  useRefetchOnGraphChange(pluginID, connectionID, queryKey, queryEnabled);
+  useRefetchOnGraphChange(pluginID, route.connection, queryKey, queryEnabled);
 
   const query = useQuery({
     queryKey,
-    queryFn: async () => GetDependencyTree(pluginID, connectionID, resourceKey, namespace, resourceID, maxDepth),
+    queryFn: queryEnabled ? ({ signal, queryKey }) => guardQuery(queryKey, signal, () => GetDependencyTree(pluginID, reference, route, maxDepth)) : skipToken,
     enabled: queryEnabled,
     refetchInterval,
   });

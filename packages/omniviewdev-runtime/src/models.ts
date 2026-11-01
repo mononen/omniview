@@ -1,18 +1,24 @@
 export * from './bindings/github.com/omniviewdev/omniview/models';
-export * from './bindings/github.com/omniviewdev/plugin-sdk/pkg/types/models';
-export * from './bindings/github.com/omniviewdev/plugin-sdk/pkg/config/models';
-export * from './bindings/github.com/omniviewdev/plugin-sdk/pkg/v1/resource/models';
-// graph: RelationshipType is already exported from the SDK resource models.
 export {
-  DependencyNode,
-  DependencyTree,
-  GraphEdge,
-  GraphNode,
-  Subgraph,
-  SubgraphNode,
-} from './bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/resource/graph/models';
-// Shadows the generated WatchState with the alias-carrying one.
-export { WatchState } from './compat/resource';
+  Capability as PluginCapability,
+  Connection,
+  ConnectionAutoConnect,
+  ConnectionAutoConnectRetry,
+  ConnectionAutoConnectTrigger,
+  ConnectionLifecycle,
+  ConnectionStatus,
+  ConnectionStatusCode,
+  PluginInfo,
+} from './bindings/github.com/omniviewdev/plugin-sdk/pkg/types/models';
+export * from './bindings/github.com/omniviewdev/plugin-sdk/pkg/config/models';
+export * from './resource/v2/domain';
+export * from './resource/v2/ancillary';
+export * from './resource/v2/host';
+export * from './resource/v2/graph';
+export { WatchState, SyncPolicy } from './types/watch';
+export type { LogSessionRequest } from './logs';
+export type { MetricQueryRequest, SubscribeRequest } from './metric';
+export type { PortForwardSessionRequest, ResourcePortForwardTarget } from './networker';
 
 // exec: selectively re-export to avoid Handler/ActionTargetBuilder collisions
 // with logs and metric packages. The UI only uses exec's Handler.
@@ -25,7 +31,6 @@ export {
 
 // logs: re-export everything except Handler and ActionTargetBuilder (collide with exec)
 export {
-  CreateSessionOptions,
   LogSession,
   LogSessionOptions,
   LogSessionStatus,
@@ -43,7 +48,6 @@ export {
   MetricResult,
   MetricShape,
   MetricUnit,
-  QueryRequest,
   QueryResponse,
   TimeSeries,
 } from './bindings/github.com/omniviewdev/plugin-sdk/pkg/v1/metric/models';
@@ -55,7 +59,6 @@ export {
   PortForwardProtocol,
   PortForwardSession,
   PortForwardSessionEncryption,
-  PortForwardSessionOptions,
   SessionState,
 } from './bindings/github.com/omniviewdev/plugin-sdk/pkg/v1/networker/models';
 
@@ -94,11 +97,12 @@ export * as exec from './bindings/github.com/omniviewdev/plugin-sdk/pkg/v1/exec/
 export * as logs from './bindings/github.com/omniviewdev/plugin-sdk/pkg/v1/logs/models';
 export * as metric from './bindings/github.com/omniviewdev/plugin-sdk/pkg/v1/metric/models';
 export * as networker from './bindings/github.com/omniviewdev/plugin-sdk/pkg/v1/networker/models';
-export * as resource from './compat/resource';
 export * as settings from './bindings/github.com/omniviewdev/plugin-sdk/settings/models';
 export * as devserver from './bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/devserver/models';
 export * as pluginlog from './bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/pluginlog/models';
+export * as mcprelay from './bindings/github.com/omniviewdev/omniview/internal/mcprelay/models';
 export * as registry from './bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/registry/models';
 export * as ui from './bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/ui/models';
 export * as utils from './bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/utils/models';
 export * as time from './bindings/time/models';
+export * as window from './bindings/github.com/omniviewdev/omniview/backend/window/models';

@@ -1,4 +1,5 @@
-// Models (auto-generated from Go types)
+// Legacy nonresource models and shared connection/plugin/exec/log utility types.
+// Resource operations and DTOs belong to the runtime resource-v2 API.
 export * from './internal/models';
 
 // Wails binding clients
@@ -11,7 +12,6 @@ export * as logs from './internal/logs/Client';
 export * as metric from './internal/metric/Client';
 export * as networker from './internal/networker/Client';
 export * as pluginManager from './internal/plugin/pluginManager';
-export * as resource from './internal/resource/Client';
 export { Application, Browser, Clipboard, Events, Screens, System, Window, WML } from '@wailsio/runtime';
 export * as settings from './internal/settings/Client';
 export * as settingsProvider from './internal/settings/provider';

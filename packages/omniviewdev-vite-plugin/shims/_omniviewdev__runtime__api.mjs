@@ -1,34 +1,48 @@
-// Auto-generated shim for '@omniviewdev/runtime/api'
+// Auto-generated shim for "@omniviewdev/runtime/api"
 // DO NOT EDIT -- regenerate with: pnpm --filter @omniviewdev/vite-plugin generate-shims
-
-const mod = window.__OMNIVIEW_SHARED__['@omniviewdev/runtime/api'];
-
-if (!mod) {
-  throw new Error(
-    '[omniview] Shared dependency "@omniviewdev/runtime/api" is not available on window.__OMNIVIEW_SHARED__. ' +
-    'Ensure the Omniview host app is running and shared deps are exported before loading this plugin.'
-  );
-}
-
-export const DataClient = mod.DataClient;
-export const DevServerManager = mod.DevServerManager;
-export const DiagnosticsClient = mod.DiagnosticsClient;
-export const ExecClient = mod.ExecClient;
-export const GetInstanceInfo = mod.GetInstanceInfo;
-export const GetOperatingSystem = mod.GetOperatingSystem;
-export const GraphClient = mod.GraphClient;
-export const LogsClient = mod.LogsClient;
-export const MetricClient = mod.MetricClient;
-export const NetworkerClient = mod.NetworkerClient;
-export const OpenFileSelectionDialog = mod.OpenFileSelectionDialog;
-export const PluginLogManager = mod.PluginLogManager;
-export const PluginManager = mod.PluginManager;
-export const ResourceClient = mod.ResourceClient;
-export const SaveFileDialog = mod.SaveFileDialog;
-export const SettingsClient = mod.SettingsClient;
-export const SettingsProvider = mod.SettingsProvider;
-export const UIClient = mod.UIClient;
-export const UtilsClient = mod.UtilsClient;
-export const WriteFileContent = mod.WriteFileContent;
-
-export default mod.default !== undefined ? mod.default : mod;
+const mod = window.__OMNIVIEW_SHARED__["@omniviewdev/runtime/api"];
+if (!mod) throw new Error('[omniview] Shared dependency ' + "@omniviewdev/runtime/api" + ' is not available on window.__OMNIVIEW_SHARED__.');
+const binding0 = mod["DataClient"];
+export { binding0 as "DataClient" };
+const binding1 = mod["DevServerManager"];
+export { binding1 as "DevServerManager" };
+const binding2 = mod["DiagnosticsClient"];
+export { binding2 as "DiagnosticsClient" };
+const binding3 = mod["ExecClient"];
+export { binding3 as "ExecClient" };
+const binding4 = mod["GetInstanceInfo"];
+export { binding4 as "GetInstanceInfo" };
+const binding5 = mod["GetOperatingSystem"];
+export { binding5 as "GetOperatingSystem" };
+const binding6 = mod["GraphClient"];
+export { binding6 as "GraphClient" };
+const binding7 = mod["HostProfiling"];
+export { binding7 as "HostProfiling" };
+const binding8 = mod["LogsClient"];
+export { binding8 as "LogsClient" };
+const binding9 = mod["McpRelayClient"];
+export { binding9 as "McpRelayClient" };
+const binding10 = mod["MetricClient"];
+export { binding10 as "MetricClient" };
+const binding11 = mod["NetworkerClient"];
+export { binding11 as "NetworkerClient" };
+const binding12 = mod["OpenFileSelectionDialog"];
+export { binding12 as "OpenFileSelectionDialog" };
+const binding13 = mod["PluginLogManager"];
+export { binding13 as "PluginLogManager" };
+const binding14 = mod["PluginManager"];
+export { binding14 as "PluginManager" };
+const binding15 = mod["ResourceClient"];
+export { binding15 as "ResourceClient" };
+const binding16 = mod["SaveFileDialog"];
+export { binding16 as "SaveFileDialog" };
+const binding17 = mod["SettingsService"];
+export { binding17 as "SettingsService" };
+const binding18 = mod["UIClient"];
+export { binding18 as "UIClient" };
+const binding19 = mod["UtilsClient"];
+export { binding19 as "UtilsClient" };
+const binding20 = mod["WindowClient"];
+export { binding20 as "WindowClient" };
+const binding21 = mod["WriteFileContent"];
+export { binding21 as "WriteFileContent" };

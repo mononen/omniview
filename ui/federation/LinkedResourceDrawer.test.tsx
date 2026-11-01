@@ -6,6 +6,7 @@ import {
 } from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { DrawerContext } from '@omniviewdev/runtime';
+import type * as Runtime from '@omniviewdev/runtime';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
@@ -23,6 +24,10 @@ const mocks = vi.hoisted(() => {
     },
   };
 });
+
+vi.mock('@/providers/monaco/useSchemaRegistration', () => ({
+  useSchemaRegistration: () => ({ error: null, isLoading: false }),
+}));
 
 vi.mock('@omniviewdev/base-ui', () => ({
   useTheme: () => ({ activeTheme: mocks.activeTheme }),
@@ -42,9 +47,10 @@ vi.mock('@omniviewdev/editors', () => ({
   OV_MONACO_THEME: 'ov-theme',
 }));
 
-vi.mock('@omniviewdev/runtime', () => ({
-  useSettings: () => ({ settings: mocks.settings }),
-}));
+vi.mock('@omniviewdev/runtime', async (importOriginal) => {
+  const runtime = await importOriginal<typeof Runtime>();
+  return { ...runtime, useSettings: () => ({ settings: mocks.settings }) };
+});
 
 vi.mock('@monaco-editor/react', () => ({
   default: (props: { theme?: string }) => <div data-testid="linked-editor" data-theme={props.theme} />,
@@ -52,10 +58,8 @@ vi.mock('@monaco-editor/react', () => ({
   useMonaco: () => mocks.monaco,
   loader: {
     init: vi.fn().mockResolvedValue({
-      languages: {
-        typescript: {
-          javascriptDefaults: { setEagerModelSync: vi.fn() },
-        },
+      typescript: {
+        javascriptDefaults: { setEagerModelSync: vi.fn() },
       },
     }),
   },
@@ -65,7 +69,13 @@ import { createLinkedResourceDrawer } from './LinkedResourceDrawer';
 
 const ctx: DrawerContext = {
   data: { apiVersion: 'v1', kind: 'Pod' },
-  resource: { id: 'pod-1', key: 'pods', connectionID: 'test-connection' },
+  resource: {
+    pluginID: 'test',
+    targetId: 'host-target',
+    reference: { address: { provider: 'test', authority: 'host-authority', type: 'pods', id: 'pod-1', scope: [] } },
+    route: { connection: 'test-connection' },
+    representation: 'json',
+  },
 };
 
 function createDrawer() {

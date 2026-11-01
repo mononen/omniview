@@ -35,13 +35,38 @@ import BottomDrawerProvider from './providers/BottomDrawer/provider';
 import { SettingsProvider } from '@omniviewdev/runtime';
 import { EXTENSION_REGISTRY } from './features/extensions/store';
 import { ConfirmationModalProvider } from './contexts/ConfirmationModalContext';
+import { McpConfirmationProvider } from './providers/McpConfirmationProvider';
 import { ConnectionStateProvider } from './features/connectionState';
 import { OperationsProvider } from '@omniviewdev/runtime';
 import { PluginServiceProvider } from '@/features/plugins';
-import { RouteProvider } from './features/router/RouteProvider';
+import { currentWindow, WindowTabDragProvider } from './features/windows';
+import WorkspaceShell from './layouts/core/main/WorkspaceShell';
+import { PanelWindowShell } from './layouts/core/panel/PanelWindowShell';
 import log from '@/features/logger';
 import { orFallback } from '@/utils/orFallback';
 import { InstanceProvider } from '@/features/instance/InstanceContext';
+
+import { SettingsWindowShell } from './features/windows/SettingsWindowShell';
+
+function WindowApplication() {
+  return (
+    <PluginServiceProvider>
+      {currentWindow.kind === 'settings' ? <SettingsWindowShell /> : (
+        <ConnectionStateProvider>
+          <BottomDrawerProvider>
+            <RightDrawerProvider>
+              <McpConfirmationProvider>
+                <WindowTabDragProvider>
+                  {currentWindow.kind === 'panel' ? <PanelWindowShell /> : <WorkspaceShell />}
+                </WindowTabDragProvider>
+              </McpConfirmationProvider>
+            </RightDrawerProvider>
+          </BottomDrawerProvider>
+        </ConnectionStateProvider>
+      )}
+    </PluginServiceProvider>
+  );
+}
 
 // 2. Global handlers for uncaught errors + promise rejections
 window.addEventListener('error', event => {
@@ -91,15 +116,7 @@ const App: React.FC = () => {
                     >
                       <OperationsProvider>
                         <ConfirmationModalProvider>
-                          <ConnectionStateProvider>
-                            <RightDrawerProvider>
-                              <BottomDrawerProvider>
-                                <PluginServiceProvider>
-                                  <RouteProvider />
-                                </PluginServiceProvider>
-                              </BottomDrawerProvider>
-                            </RightDrawerProvider>
-                          </ConnectionStateProvider>
+                          <WindowApplication />
                         </ConfirmationModalProvider>
                       </OperationsProvider>
                     </ErrorBoundary>

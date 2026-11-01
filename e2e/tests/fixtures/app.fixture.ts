@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import { test as base } from '@playwright/test';
 import type { APIRequestContext, BrowserContext, Page, TestInfo } from '@playwright/test';
-import { callBinding, Service } from './wails';
+import { bindWindowContext, callBinding, commitHostSettings, hostSettingsValues, Service } from './wails';
 import { ApplicationWorkspace } from './application';
 import { BrowserErrors } from './browser-errors';
 
@@ -82,9 +82,11 @@ const profileTest = base.extend<ProfileFixtures>({
           collectErrors(page, records); 
         });
         const page = await context.newPage();
+        await bindWindowContext(page, 'main');
         await closeSessions(page.request);
         await page.goto('/');
         await page.getByTestId('app-shell').waitFor();
+        await page.getByTestId('app-header').getByRole('button', { name: 'home', exact: true }).click();
         return { workspace, page };
       })();
       operations.push(operation);
@@ -129,6 +131,10 @@ const profileTest = base.extend<ProfileFixtures>({
 
 export const test = profileTest.extend<AppFixtures>({
   liveFrontend: [false, { option: true }],
+  page: async ({ page }, use) => {
+    await bindWindowContext(page, 'main');
+    await use(page);
+  },
   workspace: async ({ liveFrontend }, use) => {
     const workspace = await new ApplicationWorkspace('profile-a', liveFrontend).open();
     workspace.assertOwned();
@@ -155,16 +161,16 @@ export const test = profileTest.extend<AppFixtures>({
   restoreSettings: [async ({ request, workspace }, use) => {
     await workspace.verify();
     await rememberBaseline(workspace);
-    const before = await callBinding<Record<string, unknown>>(request, Service.settings, 'Values');
+    const before = await hostSettingsValues(request);
     try {
       await use(); 
     } finally {
       await workspace.verify();
-      const after = await callBinding<Record<string, unknown>>(request, Service.settings, 'Values');
+      const after = await hostSettingsValues(request);
       const changed = Object.fromEntries(Object.entries(before).filter(([id, value]) => JSON.stringify(after[id]) !== JSON.stringify(value)));
       if (Object.keys(changed).length) {
-        await callBinding(request, Service.settings, 'SetSettings', changed);
-        const restored = await callBinding<Record<string, unknown>>(request, Service.settings, 'Values');
+        await commitHostSettings(request, changed);
+        const restored = await hostSettingsValues(request);
         if (Object.entries(changed).some(([id, value]) => JSON.stringify(restored[id]) !== JSON.stringify(value))) {
           throw new Error('Actual host settings reset did not complete');
         }
@@ -185,6 +191,7 @@ export const test = profileTest.extend<AppFixtures>({
   appPage: async ({ page }, use) => {
     await page.goto('/');
     await page.getByTestId('app-shell').waitFor();
+    await page.getByTestId('app-header').getByRole('button', { name: 'home', exact: true }).click();
     await use(page);
   },
 });

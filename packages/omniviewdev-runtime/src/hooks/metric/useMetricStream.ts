@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Events } from '@wailsio/runtime';
-import { Subscribe, Unsubscribe } from '../../bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/metric/servicewrapper';
+import { Subscribe, Unsubscribe } from '../../metric';
 import type { MetricResult } from '../../bindings/github.com/omniviewdev/plugin-sdk/pkg/v1/metric/models';
 import { useResolvedPluginId } from '../useResolvedPluginId';
+import type { Value, ResourceReference, AccessRoute } from '../../resource/v2/domain';
+
 
 export type UseMetricStreamOptions = {
   /** The plugin providing metrics */
@@ -15,8 +17,11 @@ export type UseMetricStreamOptions = {
   resourceID: string;
   /** The resource namespace */
   resourceNamespace?: string;
-  /** The full resource data object */
-  resourceData?: Record<string, unknown>;
+  /** Canonical resource body, never the presentation projection. */
+  resourceData?: Value;
+  reference?: ResourceReference;
+  route?: AccessRoute;
+  params?: Record<string, string>;
   /** Specific metric IDs to stream */
   metricIDs?: string[];
   /** Polling interval in milliseconds (default 10000) */
@@ -53,7 +58,10 @@ export const useMetricStream = (
     resourceKey,
     resourceID,
     resourceNamespace = '',
-    resourceData = {},
+    resourceData,
+    reference,
+    route,
+    params,
     metricIDs = [],
     interval = 10000,
     enabled = true,
@@ -67,7 +75,7 @@ export const useMetricStream = (
   const cleanupRef = useRef<(() => void) | null>(null);
 
   const start = useCallback(async () => {
-    if (!enabled || !pluginID || !connectionID || !resourceKey || !resourceID) {
+    if (!enabled || !pluginID || !connectionID || !resourceKey) {
       return;
     }
 
@@ -76,10 +84,13 @@ export const useMetricStream = (
         resource_key: resourceKey,
         resource_id: resourceID,
         resource_namespace: resourceNamespace,
-        resource_data: resourceData as Record<string, any>,
+        resource_data: resourceData,
+        reference,
+        route,
+        params,
         metric_ids: metricIDs,
         interval: interval * 1_000_000, // ms to nanoseconds for Go time.Duration
-      } as any);
+      });
 
       setSubscriptionID(subID);
       setIsStreaming(true);
@@ -92,6 +103,8 @@ export const useMetricStream = (
           const output = JSON.parse(rawData);
           if (output.results) {
             setData(output.results);
+            setIsStreaming(true);
+            setError(null);
           }
         } catch (e) {
           console.error('Failed to parse metric stream data:', e);
@@ -102,8 +115,17 @@ export const useMetricStream = (
       const errorCleanup = Events.On(`core/metrics/error/${subID}`, (ev) => {
         const rawData = ev.data as string;
         try {
-          const output = JSON.parse(rawData);
-          setError(output.error || 'Unknown error');
+          const output: unknown = JSON.parse(rawData);
+          let message = 'Unknown error';
+          if (output && typeof output === 'object') {
+            if ('error' in output && typeof output.error === 'string' && output.error) message = output.error;
+            if ('operation_error' in output) {
+              const operationError = output.operation_error;
+              if (operationError && typeof operationError === 'object' && 'message' in operationError && typeof operationError.message === 'string') message = operationError.message;
+            }
+          }
+          setError(message);
+          setIsStreaming(false);
         } catch (e) {
           setError('Failed to parse metric stream error');
         }
@@ -116,7 +138,7 @@ export const useMetricStream = (
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [pluginID, connectionID, resourceKey, resourceID, resourceNamespace, metricIDs, interval, enabled]);
+  }, [pluginID, connectionID, resourceKey, resourceID, resourceNamespace, resourceData, reference, route, params, metricIDs, interval, enabled]);
 
   const stop = useCallback(async () => {
     if (subscriptionID) {

@@ -19,6 +19,7 @@ import (
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/registry"
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/resource"
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/settings"
+	"github.com/omniviewdev/omniview/backend/pkg/plugin/tools"
 	plugintypes "github.com/omniviewdev/omniview/backend/pkg/plugin/types"
 	"github.com/omniviewdev/omniview/internal/appstate"
 	logging "github.com/omniviewdev/plugin-sdk/log"
@@ -81,6 +82,7 @@ type Manager interface {
 	ListPlugins() []sdktypes.PluginInfo
 	GetPluginMeta(id string) (config.PluginMeta, error)
 	ListPluginMetas() []config.PluginMeta
+	GetPluginProfilingStatuses() []PluginProfilingStatus
 
 	ListAvailablePlugins() ([]registry.AvailablePlugin, error)
 	SearchPlugins(query, category, sort string) ([]registry.AvailablePlugin, error)
@@ -108,11 +110,17 @@ func NewManager(
 	networkerController networker.Controller,
 	logsController pluginlogs.Controller,
 	metricController pluginmetric.Controller,
+	toolsController tools.Controller,
 	managers map[string]plugintypes.PluginManager,
 	settingsProvider pkgsettings.Provider,
 	registryClient *registry.Client,
 	telemetryConfigFn func() TelemetryEnvConfig,
 ) Manager {
+	pluginPprofEnabled := false
+	if settingsProvider != nil {
+		enabled, err := settingsProvider.GetBool("developer.plugin_pprof_enabled")
+		pluginPprofEnabled = err == nil && enabled
+	}
 	return &pluginManager{
 		ctx:         nil, // set by Initialize or Run
 		logger:      logger,
@@ -126,23 +134,25 @@ func NewManager(
 			sdktypes.CapabilityNetworker: networkerController,
 			sdktypes.CapabilityLog:       logsController,
 			sdktypes.CapabilityMetric:    metricController,
+			sdktypes.CapabilityTools:     toolsController,
 		},
 		connfullControllers: map[sdktypes.Capability]plugintypes.LifecycleController{
 			sdktypes.CapabilityResource: resourceController,
 		},
-		managers:          managers,
-		settingsProvider:  settingsProvider,
-		registryClient:    registryClient,
-		devServerCheck:    nil, // set by SetDevServerChecker
-		devServerMgr:      nil, // set by SetDevServerManager
-		pidTracker:        NewPIDTracker(stateRoot),
-		healthChecker:     nil, // set by Run
-		pluginLogMgr:      nil, // set by SetPluginLogManager
-		backendFactory:    nil, // tests only
-		telemetryConfigFn: telemetryConfigFn,
-		emitter:           resource.NoopEmitter{},
-		pluginOpsMu:       sync.Mutex{},
-		pluginOpsLocks:    make(map[string]*sync.Mutex),
+		managers:           managers,
+		settingsProvider:   settingsProvider,
+		registryClient:     registryClient,
+		devServerCheck:     nil, // set by SetDevServerChecker
+		devServerMgr:       nil, // set by SetDevServerManager
+		pidTracker:         NewPIDTracker(stateRoot),
+		healthChecker:      nil, // set by Run
+		pluginLogMgr:       nil, // set by SetPluginLogManager
+		backendFactory:     nil, // tests only
+		telemetryConfigFn:  telemetryConfigFn,
+		pluginPprofEnabled: pluginPprofEnabled,
+		emitter:            resource.NoopEmitter{},
+		pluginOpsMu:        sync.Mutex{},
+		pluginOpsLocks:     make(map[string]*sync.Mutex),
 	}
 }
 
@@ -174,6 +184,7 @@ type pluginManager struct {
 	backendFactory      func(meta config.PluginMeta, location string) (plugintypes.PluginBackend, error)
 	emitter             resource.EventEmitter
 	telemetryConfigFn   func() TelemetryEnvConfig // returns current telemetry config for env injection
+	pluginPprofEnabled  bool                      // immutable startup snapshot; changes require a host restart
 
 	// pluginOpsMu serializes load/reload/unload operations per plugin to
 	// prevent concurrent lifecycle transitions for the same plugin (e.g.

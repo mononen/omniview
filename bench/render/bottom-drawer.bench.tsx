@@ -10,17 +10,25 @@ import { screenBench } from './harness/bench';
 import { AppProviders } from './harness/providers';
 import { forceLayout, mount, nextFrame, waitFor, type Mounted } from './harness/dom';
 import { handle } from './harness/backend';
-import { lineMarker, makeLogLines, streamLines } from './fixtures/logs';
+import { lineMarker, makeLogLines, makeLogSession, streamLines, type BenchLogSession } from './fixtures/logs';
 import { BENCH_CONNECTION_ID } from './fixtures/defaults';
 
 let sessionSeq = 0;
 let lastSessionId = '';
 
-handle('logs/servicewrapper.CreateSession', () => {
+const sessions = new Map<string, BenchLogSession>();
+handle('logs/servicewrapper.CreateSession', (plugin: string, connection: string, encoded: string) => {
   lastSessionId = `bench-drawer-${sessionSeq++}`;
-  return { id: lastSessionId, labels: {}, sources: [] };
+  const session = makeLogSession(lastSessionId, plugin, connection, encoded);
+  sessions.set(session.id, session);
+  return session;
 });
-handle('logs/servicewrapper.GetSession', (id: string) => ({ id, labels: {}, sources: [] }));
+handle('logs/servicewrapper.GetSession', (id: string) => {
+  const session = sessions.get(id);
+  if (!session) throw new Error(`Unknown benchmark log session: ${id}`);
+  return session;
+});
+handle('logs/servicewrapper.CloseSession', (id: string) => { sessions.delete(id); });
 // No terminal sessions survive from a previous run.
 handle('exec/servicewrapper.ListSessions', () => []);
 
@@ -28,23 +36,17 @@ const lines1k = makeLogLines('_', 1_000);
 
 async function mountDrawer(): Promise<Mounted> {
   localStorage.clear();
-  // Until the terminal session restore settles and the drawer has rendered it,
-  // the drawer treats arriving tabs as restored and keeps them at the saved
-  // (minimized) height, so a logs tab opened earlier would never show its
-  // lines. Wait for it like a user would.
-  let restored = false;
-  const unsubscribe = bottomDrawerChannel.on('onSessionsRestored', () => { restored = true; });
+  // Until the drawer has reconciled its restored tabs with the live sessions,
+  // it treats arriving tabs as restored and keeps them at the saved (minimized)
+  // height, so a logs tab opened earlier would never show its lines. Wait for
+  // it like a user would.
   const m = mount(
     <AppProviders>
       <div style={{ flex: 1 }} />
       <BottomDrawerContainer />
     </AppProviders>,
   );
-  try {
-    await waitFor(() => restored, { label: 'terminal sessions restored' });
-  } finally {
-    unsubscribe();
-  }
+  await waitFor(() => m.container.querySelector('[data-ov-drawer-restored]'), { label: 'drawer restore settled' });
   // Let the drawer commit the restored state before anything adds a tab.
   await nextFrame();
   return m;
@@ -56,9 +58,9 @@ async function openLogsTab(m: Mounted): Promise<void> {
   bottomDrawerChannel.emit('onCreateLogSession', {
     plugin: 'kubernetes',
     connection: BENCH_CONNECTION_ID,
-    resourceKey: 'core::v1::Pod',
+    resourceKey: 'k8s:/pods',
     resourceID: 'api-7d9c8b0f5-x0',
-    resourceData: {},
+    resourceData: { kind: 'map', value: {} },
     label: 'Logs api',
   });
   const id = await waitFor(() => lastSessionId !== before && lastSessionId, { label: 'log session created' });

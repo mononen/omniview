@@ -11,6 +11,10 @@ import { Create as $Create } from "@wailsio/runtime";
  */
 export type Connection = any;
 
+/**
+ * FindPortForwardSessionRequest filters sessions by opaque resource and connection
+ * selectors. Empty selectors do not restrict that dimension.
+ */
 export class FindPortForwardSessionRequest {
     "resource_id": string;
     "connection_id": string;
@@ -36,23 +40,43 @@ export class FindPortForwardSessionRequest {
     }
 }
 
+/**
+ * PortForwardConnectionType distinguishes resource and static forwarding targets.
+ */
 export enum PortForwardConnectionType {
     /**
      * The Go zero value for the underlying type of the enum.
      */
     $zero = "",
 
+    /**
+     * PortForwardConnectionTypeResource selects a registered resource forwarder.
+     */
     PortForwardConnectionTypeResource = "RESOURCE",
+
+    /**
+     * PortForwardConnectionTypeStatic selects a registered address forwarder.
+     */
     PortForwardConnectionTypeStatic = "STATIC",
 };
 
+/**
+ * PortForwardProtocol selects the native transport protocol.
+ */
 export enum PortForwardProtocol {
     /**
      * The Go zero value for the underlying type of the enum.
      */
     $zero = "",
 
+    /**
+     * PortForwardProtocolTCP requests a TCP tunnel.
+     */
     PortForwardProtocolTCP = "TCP",
+
+    /**
+     * PortForwardProtocolUDP requests a UDP tunnel.
+     */
     PortForwardProtocolUDP = "UDP",
 };
 
@@ -128,6 +152,10 @@ export class PortForwardSession {
     }
 }
 
+/**
+ * PortForwardSessionEncryption carries forwarder-specific encryption settings.
+ * The manager transports these settings; the native forwarder enforces support.
+ */
 export class PortForwardSessionEncryption {
     "algorithm": string;
     "key": string;
@@ -157,76 +185,33 @@ export class PortForwardSessionEncryption {
     }
 }
 
-export class PortForwardSessionOptions {
-    "connection": Connection;
-    "labels": { [_ in string]?: string };
-    "params": { [_ in string]?: string };
-    "protocol": PortForwardProtocol;
-    "connection_type": PortForwardConnectionType;
-    "encryption": PortForwardSessionEncryption;
-    "local_port": number;
-    "remote_port": number;
-
-    /** Creates a new PortForwardSessionOptions instance. */
-    constructor($$source: Partial<PortForwardSessionOptions> = {}) {
-        if (!("connection" in $$source)) {
-            this["connection"] = null;
-        }
-        if (!("labels" in $$source)) {
-            this["labels"] = {};
-        }
-        if (!("params" in $$source)) {
-            this["params"] = {};
-        }
-        if (!("protocol" in $$source)) {
-            this["protocol"] = PortForwardProtocol.$zero;
-        }
-        if (!("connection_type" in $$source)) {
-            this["connection_type"] = PortForwardConnectionType.$zero;
-        }
-        if (!("encryption" in $$source)) {
-            this["encryption"] = (new PortForwardSessionEncryption());
-        }
-        if (!("local_port" in $$source)) {
-            this["local_port"] = 0;
-        }
-        if (!("remote_port" in $$source)) {
-            this["remote_port"] = 0;
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new PortForwardSessionOptions instance from a string or object.
-     */
-    static createFrom($$source: any = {}): PortForwardSessionOptions {
-        const $$createField1_0 = $$createType0;
-        const $$createField2_0 = $$createType0;
-        const $$createField5_0 = $$createType1;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("labels" in $$parsedSource) {
-            $$parsedSource["labels"] = $$createField1_0($$parsedSource["labels"]);
-        }
-        if ("params" in $$parsedSource) {
-            $$parsedSource["params"] = $$createField2_0($$parsedSource["params"]);
-        }
-        if ("encryption" in $$parsedSource) {
-            $$parsedSource["encryption"] = $$createField5_0($$parsedSource["encryption"]);
-        }
-        return new PortForwardSessionOptions($$parsedSource as Partial<PortForwardSessionOptions>);
-    }
-}
-
+/**
+ * SessionState describes tunnel availability; stopped and failed states are terminal.
+ */
 export enum SessionState {
     /**
      * The Go zero value for the underlying type of the enum.
      */
     $zero = "",
 
+    /**
+     * SessionStateActive means the forwarder has reported readiness.
+     */
     SessionStateActive = "ACTIVE",
+
+    /**
+     * SessionStatePaused permits resumption or termination.
+     */
     SessionStatePaused = "PAUSED",
+
+    /**
+     * SessionStateStopped marks intentional termination.
+     */
     SessionStateStopped = "STOPPED",
+
+    /**
+     * SessionStateFailed marks unexpected termination.
+     */
     SessionStateFailed = "FAILED",
 };
 

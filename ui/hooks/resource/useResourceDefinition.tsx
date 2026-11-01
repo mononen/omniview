@@ -1,3 +1,4 @@
+import { Text, type DataTableFeatures } from '@omniviewdev/base-ui';
 import { useQuery } from '@tanstack/react-query';
 
 // third party
@@ -7,7 +8,7 @@ import get from 'lodash.get';
 
 // project imports
 import { ResourceClient, ExecClient } from '@omniviewdev/runtime/api';
-import type { ColumnDefinition } from '@omniviewdev/runtime/models';
+import type { AccessRoute, ColumnDefinition, HostRecord } from '@omniviewdev/runtime';
 import SelectBoxHeader from '@/components/tables/Resources/cells/SelectBoxHeader';
 import SelectBoxRow from '@/components/tables/Resources/cells/SelectBoxRow';
 import { type Actions } from '@/components/tables/Resources/actions/types';
@@ -45,20 +46,28 @@ const getAlignment = (align?: string) => {
 };
 
 type ParseColumnDefOpts = {
-  columnDefs?: ColumnDefinition[];
+  columnDefs?: readonly ColumnDefinition[];
   actions?: Actions;
   pluginID: string;
   connectionID: string;
   resourceKey: string;
-  namespaceAccessor?: string;
 };
+
+export type ResourceTableRow = { record: HostRecord; data: unknown };
 
 export type ResourceMetadata = {
   pluginID: string;
-  connectionID: string;
-  resourceID: string;
-  resourceKey: string;
-  namespace?: string;
+  route: AccessRoute;
+  record: HostRecord;
+};
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 };
 
 
@@ -71,7 +80,6 @@ const parseColumnDef = ({
   pluginID,
   connectionID,
   resourceKey,
-  namespaceAccessor,
 }: ParseColumnDefOpts) => {
   if (columnDefs === undefined) {
     return {
@@ -80,7 +88,7 @@ const parseColumnDef = ({
     };
   }
 
-  const defs: Array<ColumnDef<any>> = [
+  const defs: Array<ColumnDef<DataTableFeatures, ResourceTableRow>> = [
     {
       id: 'select',
       header: SelectBoxHeader,
@@ -92,10 +100,11 @@ const parseColumnDef = ({
   ];
 
   columnDefs.forEach((def) => {
-    let column: ColumnDef<any> = {
+    const column: ColumnDef<DataTableFeatures, ResourceTableRow> = {
       id: def.id,
       header: def.header,
-      accessorFn: (data) => {
+      accessorFn: (row) => {
+        const data = row.data;
         const val = def.accessor.split(',').map((accessor) => {
           if (accessor.startsWith('$.')) {
             return jsonpath.value(data, accessor) ?? '';
@@ -147,16 +156,14 @@ const parseColumnDef = ({
           // in-house component
           : <TextCell
             align={getAlignment(def.align)}
-            value={getValue() as string}
+            value={getValue()}
             formatter={def.formatter}
             colorMap={def.colorMap}
             resourceLink={def.resourceLink}
             metadata={{
               pluginID,
-              connectionID,
-              resourceKey,
-              resourceID: row.id,
-              namespace: namespaceAccessor ? get(row.original, namespaceAccessor, '') : '',
+              route: row.original.record.route,
+              record: row.original.record,
             }}
           />,
     };
@@ -172,15 +179,14 @@ const parseColumnDef = ({
     // add the actions to the end
     defs.push({
       id: 'menu',
-      cell: ({ row }) => <ActionMenu
+      cell: ({ row }) => isPlainObject(row.original.data) ? <ActionMenu
         actions={actions}
         plugin={pluginID}
         connection={connectionID}
         resource={resourceKey}
-        data={row.original}
-        id={row.id}
-        namespace={namespaceAccessor ? get(row.original, namespaceAccessor, '') : ''}
-      />,
+        data={row.original.data}
+        record={row.original.record}
+      /> : <Text size="xs" tone="muted">Resource actions require an object body.</Text>,
       size: 50,
       enableSorting: false,
       enableHiding: false,
@@ -198,11 +204,12 @@ const parseColumnDef = ({
  * schema objects for rendering the resource.
  */
 export const useResourceDefinition = ({ pluginID, resourceKey, connectionID }: UseResourceDefinitionOptions) => {
-  const queryKey = [pluginID, 'resource_definition', resourceKey];
+  const route = { connection: connectionID };
+  const queryKey = [pluginID, 'resource_definition', route, resourceKey];
 
   const definition = useQuery({
     queryKey,
-    queryFn: async () => ResourceClient.GetResourceDefinition(pluginID, resourceKey),
+    queryFn: async () => ResourceClient.GetResourceDefinition(pluginID, route, resourceKey),
     retry: false,
   });
 
@@ -217,15 +224,9 @@ export const useResourceDefinition = ({ pluginID, resourceKey, connectionID }: U
     retry: false,
   });
 
-  const namespaces = useQuery({
-    queryKey: [pluginID, 'connection', 'namespaces', connectionID],
-    queryFn: async () => ResourceClient.GetConnectionNamespaces(pluginID, connectionID),
-    retry: false,
-  });
 
   return {
     data: definition.data,
-    namespaces,
     isLoading: definition.isLoading,
     isError: definition.isError,
     error: definition.error,
@@ -235,7 +236,6 @@ export const useResourceDefinition = ({ pluginID, resourceKey, connectionID }: U
       pluginID,
       connectionID,
       resourceKey,
-      namespaceAccessor: definition.data?.namespace_accessor,
     }),
   };
 };

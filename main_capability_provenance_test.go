@@ -17,10 +17,10 @@ import (
 	"github.com/omniviewdev/omniview/internal/appstate"
 	logging "github.com/omniviewdev/plugin-sdk/log"
 	"github.com/omniviewdev/plugin-sdk/pkg/config"
+	sdkresource "github.com/omniviewdev/plugin-sdk/pkg/resource/v2"
 	sdktypes "github.com/omniviewdev/plugin-sdk/pkg/types"
+	sdklogs "github.com/omniviewdev/plugin-sdk/pkg/v1/logs"
 	sdkmetric "github.com/omniviewdev/plugin-sdk/pkg/v1/metric"
-	sdkresource "github.com/omniviewdev/plugin-sdk/pkg/v1/resource"
-	"github.com/omniviewdev/plugin-sdk/pkg/v1/resource/resourcetest"
 )
 
 // This invokes the production composition's metric consumer and the real
@@ -29,7 +29,7 @@ import (
 func TestCapabilityConnectionAdmissionPreservesUIAndNativeOrigins(t *testing.T) {
 	const pluginID = "native-runtime"
 	const connectionID = "account/a::opaque"
-	const resourceKey = "host::v1::Runtime"
+	const resourceKey = "native/runtime"
 	for _, tc := range []struct {
 		name   string
 		ui     bool
@@ -56,15 +56,26 @@ func TestCapabilityConnectionAdmissionPreservesUIAndNativeOrigins(t *testing.T) 
 				}
 				return nil
 			}))
-			provider, err := sdkresource.BuildResourceController(ctx, sdkresource.ResourcePluginConfig[string]{
-				Logger: logger,
-				Connections: &resourcetest.StubConnectionProvider[string]{LoadConnectionsFunc: func(context.Context) ([]sdktypes.Connection, error) {
-					return []sdktypes.Connection{{ID: connectionID, Data: map[string]any{"sampler": "gomaxprocs"}}}, nil
-				}},
-				Resources: []sdkresource.ResourceRegistration[string]{{Meta: sdkresource.ResourceMeta{Group: "host", Version: "v1", Kind: "Runtime"}, Resourcer: &resourcetest.StubResourcer[string]{}}},
+			provider, err := sdkresource.NewController(sdkresource.Config[int]{
+				Catalog: func(context.Context, sdkresource.CatalogRequest) (sdkresource.Catalog, error) {
+					return sdkresource.Catalog{Provider: pluginID, Revision: "runtime-v1", Types: []sdkresource.ResourceType{}, Coverage: sdkresource.Coverage{Kind: "complete", Paths: []string{}}}, nil
+				},
+				Lifecycle: &sdkresource.Lifecycle[int]{
+					LoadConnections: func(context.Context) ([]sdktypes.Connection, error) {
+						return []sdktypes.Connection{{ID: connectionID, Data: map[string]any{"sampler": "gomaxprocs"}}}, nil
+					},
+					CreateClient: func(context.Context, sdktypes.Connection) (*int, error) {
+						sample := runtime.GOMAXPROCS(0)
+						return &sample, nil
+					},
+					DestroyClient: func(_ context.Context, sample *int) error {
+						*sample = 0
+						return nil
+					},
+				},
 			})
 			require.NoError(t, err)
-			t.Cleanup(provider.Close)
+			t.Cleanup(func() { _ = provider.Close() })
 			manager := sdkmetric.NewManager(logger, nil, sdkmetric.ProviderInfo{ID: pluginID}, nil,
 				func(query *sdkmetric.QueryContext, _ sdkmetric.QueryRequest) (*sdkmetric.QueryResponse, error) {
 					if query.Connection == nil || query.Connection.Data["sampler"] != "gomaxprocs" {
@@ -72,6 +83,7 @@ func TestCapabilityConnectionAdmissionPreservesUIAndNativeOrigins(t *testing.T) 
 					}
 					return &sdkmetric.QueryResponse{Success: true, Results: []sdkmetric.MetricResult{{CurrentValue: &sdkmetric.CurrentValue{MetricID: "gomaxprocs", Value: float64(runtime.GOMAXPROCS(0))}}}}, nil
 				}, nil)
+			manager.BindConnectionContextProvider(provider)
 			backend := plugintypes.NewInProcessBackend(map[string]interface{}{"resource": provider, "metric": manager})
 			resources := hostresource.NewController(logger, nil, state.PluginStore, boundary)
 			resources.Run(ctx)
@@ -81,6 +93,9 @@ func TestCapabilityConnectionAdmissionPreservesUIAndNativeOrigins(t *testing.T) 
 			})
 			resources.OnPluginInit(pluginID, config.PluginMeta{})
 			require.NoError(t, resources.OnPluginStart(pluginID, config.PluginMeta{}, backend))
+			status, startErr := resources.StartConnection(invocation.HostContext(ctx), pluginID, connectionID)
+			require.NoError(t, startErr)
+			require.Equal(t, sdktypes.ConnectionStatusConnected, status.Status)
 
 			var metrics pluginmetric.Controller
 			if tc.ui {
@@ -111,4 +126,31 @@ func TestCapabilityConnectionAdmissionPreservesUIAndNativeOrigins(t *testing.T) 
 			require.Equal(t, float64(runtime.GOMAXPROCS(0)), response.Results[0].CurrentValue.Value)
 		})
 	}
+}
+
+func TestProductionHeadlessLogsPreserveExternalAuthority(t *testing.T) {
+	logger := logging.NewNop()
+	state := appstate.NewTestService(t)
+	var observed invocation.Origin
+	boundary := invocation.NewBoundary(invocation.AuthorizeFunc(func(principal invocation.Principal, operation string, _ invocation.Target) error {
+		if operation == "logs.CreateSession" {
+			observed = principal.Origin()
+			if observed == invocation.ExternalAgent {
+				return fmt.Errorf("external logs denied")
+			}
+		}
+		return nil
+	}))
+	resources := hostresource.NewController(logger, nil, state.PluginStore, boundary)
+	_, _, logs, _ := newUICapabilityControllers(logger, nil, resources, invocation.NewScope(invocation.TrustedUI))
+	ctx := invocation.NewScope(invocation.ExternalAgent).Context(context.Background())
+	_, err := logs.ReadResourceLogs(ctx, "plugin", sdklogs.CreateSessionOptions{
+		ResourceKey: "pod", ResourceID: "pod",
+		Route: &sdkresource.AccessRoute{Connection: "route"},
+		Reference: &sdkresource.ResourceReference{Address: sdkresource.ResourceAddress{
+			Provider: "provider", Authority: "authority", Type: "pod", ID: "pod", Scope: []sdkresource.ScopeEntry{},
+		}},
+	})
+	require.Error(t, err)
+	require.Equal(t, invocation.ExternalAgent, observed, "production composition must not stamp the UI realm")
 }

@@ -24,6 +24,31 @@ export const CoreNetworkerPortforwardClosed = "core/networker/portforward/closed
 export const CoreNetworkerPortforwardCreated = "core/networker/portforward/created";
 
 /**
+ * Name of the custom event "mcp/config_changed".
+ */
+export const McpConfigChanged = "mcp/config_changed";
+
+/**
+ * Name of the custom event "mcp/confirmation/requested".
+ */
+export const McpConfirmationRequested = "mcp/confirmation/requested";
+
+/**
+ * Name of the custom event "mcp/confirmation/resolved".
+ */
+export const McpConfirmationResolved = "mcp/confirmation/resolved";
+
+/**
+ * Name of the custom event "mcp/status".
+ */
+export const McpStatus = "mcp/status";
+
+/**
+ * Name of the custom event "mcp/tools_changed".
+ */
+export const McpToolsChanged = "mcp/tools_changed";
+
+/**
  * Name of the custom event "menu/context/drawer-tab/close".
  */
 export const MenuContextDrawerTabClose = "menu/context/drawer-tab/close";
@@ -174,12 +199,57 @@ export const PluginUpdateError = "plugin/update_error";
 export const PluginUpdateStarted = "plugin/update_started";
 
 /**
+ * Name of the custom event "resource/connection/metadata".
+ */
+export const ResourceConnectionMetadata = "resource/connection/metadata";
+
+/**
  * Name of the custom event "settings/changed".
  */
 export const SettingsChanged = "settings/changed";
 
 /**
+ * Name of the custom event "settings/state".
+ */
+export const SettingsState = "settings/state";
+
+/**
  * Name of the custom event "watch/STATE".
  */
 export const WatchSTATE = "watch/STATE";
+
+/**
+ * Name of the custom event "windows/changed".
+ */
+export const WindowsChanged = "windows/changed";
+
+/**
+ * Name of the custom event "windows/closed".
+ */
+export const WindowsClosed = "windows/closed";
+
+/**
+ * Name of the custom event "windows/drag/begin".
+ */
+export const WindowsDragBegin = "windows/drag/begin";
+
+/**
+ * Name of the custom event "windows/drag/drop".
+ */
+export const WindowsDragDrop = "windows/drag/drop";
+
+/**
+ * Name of the custom event "windows/drag/end".
+ */
+export const WindowsDragEnd = "windows/drag/end";
+
+/**
+ * Name of the custom event "windows/drag/hover".
+ */
+export const WindowsDragHover = "windows/drag/hover";
+
+/**
+ * Name of the custom event "windows/drag/leave".
+ */
+export const WindowsDragLeave = "windows/drag/leave";
 

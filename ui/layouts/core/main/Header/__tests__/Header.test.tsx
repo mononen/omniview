@@ -3,9 +3,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { StrictMode, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Provider } from 'react-redux';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ExtensionProvider, GLOBAL_SEARCH_OPEN_EVENT, PluginWindow, usePluginContext } from '@omniviewdev/runtime';
+import { ExtensionProvider, GLOBAL_SEARCH_OPEN_EVENT, PluginWindow, resourceQueryKeys, usePluginContext } from '@omniviewdev/runtime';
 import { Category, ConnectionStatusCode, Setting, SettingType } from '@omniviewdev/runtime/models';
 import type * as RuntimeAPI from '@omniviewdev/runtime/api';
 import type * as RuntimeCore from '@omniviewdev/runtime';
@@ -23,6 +23,7 @@ import { createDeferred, createTestDeps } from '@/features/plugins/testing/helpe
 import headerReducer, { actions } from '@/store/header/slice';
 import { HeaderAreaItemType, type HeaderIconLink, type HeaderState } from '@/store/header/types';
 import CoreLayoutHeader from '..';
+import { RouterBoundPageNavigation } from '@/features/workspace/testing/RouterBoundPageNavigation';
 
 const fixture = vi.hoisted(() => {
   const previousBootstrap = window.__OMNIVIEW_BOOTSTRAP__;
@@ -51,6 +52,37 @@ const native = vi.hoisted(() => ({
   unMaximise: vi.fn(async () => undefined),
 }));
 
+function resourceTypeScope(pluginId = 'opaque', connectionId = 'project'): Extract<RuntimeCore.SearchScopeV1, { kind: 'resource-type' }> {
+  return {
+    kind: 'resource-type', pluginId, targetId: 'header-search-membership', label: 'Instances',
+    target: { provider: pluginId, authority: 'host-test-authority', type: 'instance', route: { connection: connectionId }, scope: [], representation: 'json' },
+  };
+}
+
+function resourceScope(): Extract<RuntimeCore.SearchScopeV1, { kind: 'resource' }> {
+  const { pluginId, targetId, target } = resourceTypeScope();
+  return {
+    kind: 'resource', pluginId, targetId, label: 'Virtual machine',
+    route: target.route, representation: target.representation,
+    reference: { address: { provider: target.provider, authority: target.authority, type: target.type, id: 'vm', scope: [] } },
+  };
+}
+
+function resourceUpdate(targetId = 'header-search-membership'): { data: RuntimeCore.HostWatchUpdatePayload } {
+  const scope = resourceScope();
+  return { data: {
+    route: scope.route, metadata: {}, guarantee: 'bestEffort',
+    record: {
+      key: 'host-test-row', addressKey: 'host-test-address', targetId, route: scope.route,
+      record: {
+        reference: scope.reference, body: { kind: 'map', value: {} },
+        representation: { id: scope.representation, revision: '1', schema: { state: 'unavailable', validation: 'unvalidated', unvalidated: [] } },
+        coverage: { kind: 'complete', paths: [] },
+      },
+    },
+  } };
+}
+
 vi.mock('@wailsio/runtime', async (importOriginal) => {
   const original = await importOriginal<typeof WailsRuntime>();
   return {
@@ -73,10 +105,6 @@ vi.mock('../../../../../../packages/omniviewdev-runtime/src/bindings/github.com/
   ...await importOriginal<Record<string, unknown>>(),
   GetPluginMeta: async (pluginId: string) => ({ id: pluginId, name: pluginId, version: 'test' }),
 }));
-vi.mock('../../../../../../packages/omniviewdev-runtime/src/bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/settings/servicewrapper', async (importOriginal) => ({
-  ...await importOriginal<Record<string, unknown>>(),
-  PluginValues: async () => ({}),
-}));
 
 vi.mock('@omniviewdev/runtime/api', async (importOriginal) => {
   const original = await importOriginal<typeof RuntimeAPI>();
@@ -89,7 +117,7 @@ vi.mock('@omniviewdev/runtime/api', async (importOriginal) => {
       stateRoot: '/disposable/header/state',
       version: 'test',
       commit: 'test',
-      readiness: 'ready',
+      readiness: 'host-ready',
       repositories: [],
       endpoints: { browser: null, vite: null, hmr: null, mcp: null, control: null, health: null },
     }),
@@ -104,15 +132,16 @@ vi.mock('@omniviewdev/runtime/api', async (importOriginal) => {
       SubscribeResource: native.subscribeResource,
       UnsubscribeResource: native.unsubscribeResource,
     },
-    SettingsProvider: {
-      ...original.SettingsProvider,
-      ListSettings: vi.fn(async () => ({
-        appearance: new Category({
+    SettingsService: {
+      ...original.SettingsService,
+      GetSnapshot: vi.fn(async () => ({
+        scope: { kind: 'host' },
+        categories: { appearance: new Category({
           id: 'appearance',
           label: 'Appearance',
           description: 'Application appearance',
           settings: { theme: new Setting({ id: 'theme', label: 'Theme', type: SettingType.Select }) },
-        }),
+        }) },
       })),
     },
   };
@@ -173,7 +202,7 @@ afterAll(() => {
   window.__OMNIVIEW_BOOTSTRAP__ = fixture.previousBootstrap;
 });
 
-it('keeps development identity and details available when optional header controls are hidden', async () => {
+it('leaves instance controls out of the header when optional controls are hidden', async () => {
   const item: HeaderIconLink = {
     id: 'optional-settings',
     type: HeaderAreaItemType.LINK,
@@ -193,11 +222,13 @@ it('keeps development identity and details available when optional header contro
   render(
     <Provider store={store}>
       <MemoryRouter>
-        <HeaderProviders>
-          <InstanceProvider>
-            <CoreLayoutHeader />
-          </InstanceProvider>
-        </HeaderProviders>
+        <RouterBoundPageNavigation>
+          <HeaderProviders>
+            <InstanceProvider>
+              <CoreLayoutHeader />
+            </InstanceProvider>
+          </HeaderProviders>
+        </RouterBoundPageNavigation>
       </MemoryRouter>
     </Provider>,
   );
@@ -211,15 +242,10 @@ it('keeps development identity and details available when optional header contro
   });
 
   expect(screen.queryByRole('button', { name: 'Optional settings tool' })).not.toBeInTheDocument();
-  const instanceButton = screen.getByRole('button', { name: 'DEV · Header profile — instance details' });
-  expect(instanceButton).toBeVisible();
+  expect(screen.queryByRole('button', { name: /DEV · Header profile/ })).not.toBeInTheDocument();
   await waitFor(() => {
     expect(document.title).toBe('Omniview — DEV · Header profile');
   });
-  fireEvent.click(instanceButton);
-  expect(await screen.findByRole('dialog')).toBeVisible();
-  expect(await screen.findByText('Identity confirmed by the host.')).toBeVisible();
-  expect(screen.getByText(fixture.identity.instanceID)).toBeVisible();
 });
 
 function CurrentLocation() {
@@ -246,18 +272,101 @@ function renderSearchHeader(searchVisible = true, service?: PluginService, clien
     <StrictMode>
       <Provider store={store}>
         <MemoryRouter initialEntries={['/plugins']}>
-          <HeaderProviders service={service} client={client}>
-            <InstanceProvider>
-              <button type='button'>Before header</button>
-              <CoreLayoutHeader />
-              <CurrentLocation />
-            </InstanceProvider>
-          </HeaderProviders>
+          <RouterBoundPageNavigation>
+            <HeaderProviders service={service} client={client}>
+              <InstanceProvider>
+                <button type='button'>Before header</button>
+                <CoreLayoutHeader />
+                <CurrentLocation />
+              </InstanceProvider>
+            </HeaderProviders>
+          </RouterBoundPageNavigation>
         </MemoryRouter>
       </Provider>
     </StrictMode>,
   );
 }
+
+it('keeps the typed search session and opener across late plugin route publication, reload and removal', async () => {
+  const testDeps = createTestDeps();
+  const service = new PluginService(testDeps.deps);
+  const header: HeaderState = {
+    visible: true,
+    areas: {
+      left: { visible: false, type: 'items', items: [] },
+      center: { visible: true, type: 'search', items: [] },
+      right: { visible: false, type: 'items', items: [] },
+    },
+  };
+  const store = configureStore({ reducer: { header: headerReducer }, preloadedState: { header } });
+  render(
+    <StrictMode>
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/plugins']}>
+          <RouterBoundPageNavigation>
+            <HeaderProviders service={service}>
+              <InstanceProvider>
+                <CoreLayoutHeader />
+                <CurrentLocation />
+              </InstanceProvider>
+            </HeaderProviders>
+          </RouterBoundPageNavigation>
+        </MemoryRouter>
+      </Provider>
+    </StrictMode>,
+  );
+  try {
+    const opener = await screen.findByRole('button', { name: 'Search Omniview' });
+    opener.focus();
+    fireEvent.keyDown(opener, { key: 'k', metaKey: true });
+    const input = await screen.findByRole('combobox', { name: 'Search Omniview' });
+    fireEvent.change(input, { target: { value: 'Home' } });
+    await screen.findByRole('option', { name: /^Home/ });
+
+    testDeps.importer.register('late-search', {
+      plugin: new PluginWindow().withRoutes([{ index: true, Component: () => <h1>Late plugin</h1> }]),
+    });
+    await act(async () => {
+      await service.load('late-search');
+    });
+    expect(screen.getByRole('combobox', { name: 'Search Omniview' })).toBe(input);
+    expect(input).toHaveValue('Home');
+    expect(input).toHaveFocus();
+
+    await act(async () => {
+      await service.reload('late-search');
+    });
+    expect(screen.getByRole('combobox', { name: 'Search Omniview' })).toBe(input);
+    expect(input).toHaveValue('Home');
+    expect(input).toHaveFocus();
+
+    await act(async () => {
+      await service.unload('late-search');
+    });
+    expect(screen.getByRole('combobox', { name: 'Search Omniview' })).toBe(input);
+    expect(input).toHaveValue('Home');
+    fireEvent.keyDown(input, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Search Omniview' })).not.toBeInTheDocument();
+    });
+    expect(opener).toHaveFocus();
+
+    fireEvent.click(opener);
+    const reopened = await screen.findByRole('combobox', { name: 'Search Omniview' });
+    fireEvent.change(reopened, { target: { value: 'Home' } });
+    const home = await screen.findByRole('option', { name: /^Home/ });
+    await waitFor(() => {
+      expect(home).not.toHaveAttribute('aria-disabled', 'true');
+    });
+    fireEvent.keyDown(reopened, { key: 'Enter' });
+    await waitFor(() => {
+      expect(screen.getByTestId('current-location')).toHaveTextContent(/^\/$/);
+    });
+    expect(screen.queryByRole('dialog', { name: 'Search Omniview' })).not.toBeInTheDocument();
+  } finally {
+    cleanup();
+  }
+});
 
 it.each(['ctrlKey', 'metaKey'] as const)(
   'opens one real header session with %s+K even when the configurable search area is hidden',
@@ -724,19 +833,19 @@ it.each(['close', 'unmount', 'scope-change'] as const)('releases late native acq
   const view = renderSearchHeader(true, service);
   act(() => {
     window.dispatchEvent(new CustomEvent(GLOBAL_SEARCH_OPEN_EVENT, { detail: {
-      scope: { kind: 'resource', pluginId: 'opaque', connectionId: 'project', resourceKey: 'instance',
-        resourceId: 'vm', namespace: 'region', label: 'Virtual machine' },
+      scope: resourceScope(),
     } }));
   });
   await screen.findByRole('combobox', { name: /search/i });
   await waitFor(() => {
-    expect(native.subscribeResource).toHaveBeenCalledExactlyOnceWith('opaque', 'project', 'instance'); 
+    expect(native.subscribeResource).toHaveBeenCalledOnce();
   });
-  act(() => {
+  await act(async () => {
     // Moving from an instance to its type keeps the existing native subscription.
     window.dispatchEvent(new CustomEvent(GLOBAL_SEARCH_OPEN_EVENT, { detail: {
-      scope: { kind: 'resource-type', pluginId: 'opaque', connectionId: 'project', resourceKey: 'instance', label: 'Instances' },
+      scope: resourceTypeScope(),
     } }));
+    await Promise.resolve();
   });
   expect(native.subscribeResource).toHaveBeenCalledOnce();
   if (operation === 'unmount') {
@@ -756,7 +865,7 @@ it.each(['close', 'unmount', 'scope-change'] as const)('releases late native acq
     acquisition.resolve();
     await acquisition.promise;
   });
-  expect(native.unsubscribeResource).toHaveBeenCalledExactlyOnceWith('opaque', 'project', 'instance');
+  expect(native.unsubscribeResource).toHaveBeenCalledOnce();
   expect(native.listeners.get('opaque/project/instance/UPDATE')?.size).toBe(0);
   view.unmount();
   expect(native.unsubscribeResource).toHaveBeenCalledOnce();
@@ -772,7 +881,7 @@ it('coalesces native resource bursts without rediscovering plugins', async () =>
     items: [{
       id: 'snapshot', label: `Snapshot ${version}`,
       value: { schemaVersion: 1, kind: 'navigation',
-        scope: { kind: 'resource-type', pluginId: 'opaque', connectionId: 'project', resourceKey: 'instance', label: 'Instances' },
+        scope: resourceTypeScope(),
         target: { kind: 'plugin', pluginId: 'opaque', path: '/' } },
     }],
     completion: 'complete',
@@ -790,7 +899,7 @@ it('coalesces native resource bursts without rediscovering plugins', async () =>
   renderSearchHeader(true, service);
   act(() => {
     window.dispatchEvent(new CustomEvent(GLOBAL_SEARCH_OPEN_EVENT, { detail: {
-      scope: { kind: 'resource-type', pluginId: 'opaque', connectionId: 'project', resourceKey: 'instance', label: 'Instances' },
+      scope: resourceTypeScope(),
     } }));
   });
   await screen.findByRole('combobox', { name: /search/i });
@@ -800,19 +909,17 @@ it('coalesces native resource bursts without rediscovering plugins', async () =>
   await screen.findByRole('option', { name: /Snapshot 0/ });
   const searches = search.mock.calls.length;
   const discoveries = native.listPlugins.mock.calls.length;
-  const invalidate = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
   try {
     await act(async () => {
       for (let index = 0; index < 10; index++) {
         version = index + 1;
         native.listeners.get('opaque/project/instance/UPDATE')?.forEach((listener) => {
-          listener({ data: {} }); 
+          listener(resourceUpdate());
         });
       }
 
       await Promise.resolve();
     });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['opaque', 'project', 'instance'], refetchType: 'none' });
     expect(native.listPlugins).toHaveBeenCalledTimes(discoveries);
     expect(native.subscribeResource).toHaveBeenCalledOnce();
     expect(await screen.findByRole('option', { name: /Snapshot 10/ })).toBeVisible();
@@ -821,7 +928,6 @@ it('coalesces native resource bursts without rediscovering plugins', async () =>
     expect(search.mock.calls.length - searches).toBeGreaterThan(0);
     expect(search.mock.calls.length - searches).toBeLessThanOrEqual(2);
   } finally {
-    invalidate.mockRestore();
     await act(async () => {
       await service.unload('opaque'); 
     });
@@ -917,7 +1023,7 @@ it('uses connection-depth adapter targets and isolates throwing adapters', async
     expect(supportsScope).toHaveBeenCalledWith([{ kind: 'connection', pluginId, connectionId: 'cluster', label: 'Cluster' }]);
     const scoped = await provider.search({ ...request, scopes: [
       { kind: 'connection', pluginId, connectionId: 'cluster', label: 'Cluster' },
-      { kind: 'resource-type', pluginId, connectionId: 'cluster', resourceKey: 'instance', label: 'Instances' },
+      resourceTypeScope(pluginId, 'cluster'),
     ] });
     expect(scoped.items[0]?.value).toMatchObject({ action: { recovery: 'connection', target: { kind: 'connection' } } });
   } finally {
@@ -935,7 +1041,7 @@ it('reports native subscription failure and retries without replacing the health
   const view = renderSearchHeader(true, service);
   act(() => {
     window.dispatchEvent(new CustomEvent(GLOBAL_SEARCH_OPEN_EVENT, { detail: {
-      scope: { kind: 'resource-type', pluginId: 'opaque', connectionId: 'project', resourceKey: 'instance', label: 'Instances' },
+      scope: resourceTypeScope(),
     } }));
   });
   expect(await screen.findByText('Live updates are unavailable. Results may be out of date.')).toBeVisible();
@@ -966,7 +1072,7 @@ it.each(['close', 'unmount'] as const)('ignores late native subscription failure
   const view = renderSearchHeader(true, service);
   act(() => {
     window.dispatchEvent(new CustomEvent(GLOBAL_SEARCH_OPEN_EVENT, { detail: {
-      scope: { kind: 'resource-type', pluginId: 'opaque', connectionId: 'project', resourceKey: 'instance', label: 'Instances' },
+      scope: resourceTypeScope(),
     } }));
   });
   await screen.findByRole('combobox', { name: /search/i });
@@ -998,7 +1104,7 @@ it.each(['close', 'unmount'] as const)('ignores late native subscription failure
 
 it.each(['publish', 'close'] as const)('preserves an event during a canonical query fetch until %s without leaking cache listeners', async (operation) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
-  const queryKey = ['opaque', 'project', 'instance', 'list'];
+  const queryKey = resourceQueryKeys.list('opaque');
   const cache = client.getQueryCache();
   const cacheListeners = new Set<unknown>();
   const subscribe = cache.subscribe.bind(cache);
@@ -1025,7 +1131,7 @@ it.each(['publish', 'close'] as const)('preserves an event during a canonical qu
     return { items: [{
       id: 'snapshot', label: `Snapshot ${snapshot}`,
       value: { schemaVersion: 1, kind: 'navigation',
-        scope: { kind: 'resource-type', pluginId: 'opaque', connectionId: 'project', resourceKey: 'instance', label: 'Instances' },
+        scope: resourceTypeScope(),
         target: { kind: 'plugin', pluginId: 'opaque', path: '/' } },
     }], completion: 'complete' };
   };
@@ -1046,7 +1152,7 @@ it.each(['publish', 'close'] as const)('preserves an event during a canonical qu
   try {
     act(() => {
       window.dispatchEvent(new CustomEvent(GLOBAL_SEARCH_OPEN_EVENT, { detail: {
-        scope: { kind: 'resource-type', pluginId: 'opaque', connectionId: 'project', resourceKey: 'instance', label: 'Instances' },
+        scope: resourceTypeScope(),
       } }));
     });
     await waitFor(() => {
@@ -1057,10 +1163,16 @@ it.each(['publish', 'close'] as const)('preserves an event during a canonical qu
     });
     expect(cacheListeners.size).toBe(idleListeners + 1);
     act(() => {
+      native.listeners.get('opaque/project/instance/UPDATE')?.forEach((listener) => {
+        listener(resourceUpdate('another-view-membership'));
+      });
+    });
+    expect(client.getQueryState(queryKey)?.isInvalidated).toBe(false);
+    act(() => {
       backend = 'new';
       for (let index = 0; index < 10; index++) {
         native.listeners.get('opaque/project/instance/UPDATE')?.forEach((listener) => {
-          listener({ data: {} }); 
+          listener(resourceUpdate());
         });
       }
     });

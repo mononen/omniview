@@ -1,20 +1,16 @@
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { themeRegistry } from '@omniviewdev/base-ui';
 import type * as AppThemeControllerModule from '@/theme/AppThemeController';
 import { Setting, SettingType } from '@omniviewdev/runtime/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  reload: vi.fn(),
   selectTheme: vi.fn(),
   setSettings: vi.fn(),
   validateSetting: vi.fn(),
   requestedThemeId: 'dark',
 }));
 
-vi.mock('@omniviewdev/runtime/api', () => ({
-  SettingsProvider: { ValidateSetting: mocks.validateSetting },
-}));
 
 vi.mock('@/theme/AppThemeController', async (importOriginal) => {
   const actual = await importOriginal<typeof AppThemeControllerModule>();
@@ -29,49 +25,40 @@ vi.mock('@/theme/AppThemeController', async (importOriginal) => {
   };
 });
 
-vi.mock('@/hooks/settings/useCategorySettings', () => ({
-  useCategorySettings: () => ({
-    settings: {
-      data: {
-        id: 'appearance',
-        label: 'Appearance',
-        description: 'Customize Omniview',
-        icon: 'LuPaintbrush',
-        settings: {
-          theme: new Setting({
-            id: 'theme',
-            label: 'Theme',
-            description: 'Application color theme',
-            type: SettingType.Select,
-            value: 'dark',
-            default: 'dark',
-            options: [],
-          }),
-          headerSearch: new Setting({
-            id: 'headerSearch',
-            label: 'Header Search Label',
-            description: 'Header search placeholder',
-            type: SettingType.Text,
-            value: 'Search',
-            default: 'Search',
-            options: [],
-          }),
-        },
+vi.mock('@omniviewdev/runtime', () => ({
+  useScopedSettings: () => ({
+    categories: { appearance: {
+      id: 'appearance',
+      label: 'Appearance',
+      description: 'Customize Omniview',
+      icon: 'LuPaintbrush',
+      settings: {
+        theme: new Setting({
+          id: 'theme',
+          label: 'Theme',
+          description: 'Application color theme',
+          type: SettingType.Select,
+          value: 'dark',
+          default: 'dark',
+          options: [],
+        }),
+        headerSearch: new Setting({
+          id: 'headerSearch',
+          label: 'Header Search Label',
+          description: 'Header search placeholder',
+          type: SettingType.Text,
+          value: 'Search',
+          default: 'Search',
+          options: [],
+        }),
       },
-      isLoading: false,
-      isError: false,
-    },
-    setSettings: mocks.setSettings,
+    } },
+    isLoading: false,
+    error: null,
+    commit: mocks.setSettings,
+    validate: mocks.validateSetting,
   }),
 }));
-
-vi.mock('@omniviewdev/runtime', async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    useSettings: () => ({ reload: mocks.reload }),
-  };
-});
 
 vi.mock('@/hooks/useDevMode', () => ({
   useDevMode: () => false,
@@ -81,9 +68,8 @@ import CoreSettingsPage from './CoreSettingsPage';
 
 describe('CoreSettingsPage appearance settings', () => {
   beforeEach(() => {
-    mocks.reload.mockReset();
     mocks.selectTheme.mockReset().mockResolvedValue(undefined);
-    mocks.setSettings.mockReset().mockResolvedValue(undefined);
+    mocks.setSettings.mockReset().mockResolvedValue({ applied: true, uncertain: false, message: '' });
     mocks.validateSetting.mockReset().mockResolvedValue({ valid: true, code: 'valid', message: 'Value is valid.' });
     mocks.requestedThemeId = 'dark';
   });
@@ -93,10 +79,7 @@ describe('CoreSettingsPage appearance settings', () => {
   it('applies the theme outside draft state while ordinary settings still save normally', async () => {
     render(<CoreSettingsPage id='appearance' />);
 
-    fireEvent.click(screen.getByRole('combobox'));
-    const obsidian = within(screen.getByRole('listbox')).getByRole('option', { name: 'Obsidian' });
-    fireEvent.mouseMove(obsidian);
-    fireEvent.click(obsidian);
+    fireEvent.click(screen.getByRole('radio', { name: 'Obsidian' }));
 
     expect(mocks.selectTheme).toHaveBeenCalledWith('obsidian');
     expect(screen.queryByRole('button', { name: 'Save Changes' })).not.toBeInTheDocument();

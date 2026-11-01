@@ -9,14 +9,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/omniviewdev/omniview/backend/pkg/apperror"
 	"github.com/omniviewdev/omniview/backend/pkg/invocation"
-	resource "github.com/omniviewdev/plugin-sdk/pkg/v1/resource"
+	resource "github.com/omniviewdev/plugin-sdk/pkg/resource/v2"
 )
 
 // StreamAction commits a public handle only after concrete native provider ready.
 // The producer owns its lifetime before it starts; request cancellation is bridged
 // through the commit, never reparented after a request-bound producer has started.
-func (c *controller) StreamAction(ctx context.Context, pluginID, connectionID, key, actionID string, input resource.ActionInput) (id string, retErr error) {
-	ctx, err := c.admit(ctx, "resource.StreamAction", invocation.Target{Provider: pluginID, Connection: connectionID, ResourceType: key, Object: input.ID, Action: actionID, Scope: namespaceScope(input.Namespace)})
+func (c *controller) StreamAction(ctx context.Context, pluginID string, input resource.ActionRequest) (id string, retErr error) {
+	ctx, err := c.admit(ctx, "resource.StreamAction", actionTarget(pluginID, input))
 	if err != nil {
 		return "", err
 	}
@@ -26,12 +26,37 @@ func (c *controller) StreamAction(ctx context.Context, pluginID, connectionID, k
 			finishResource(ctx, &retErr)
 		}
 	}()
-	provider, sessionCtx, err := c.withSession(ctx, pluginID, connectionID)
+	if err := resource.ValidateActionRequest(input); err != nil {
+		return "", err
+	}
+	provider, generation, sessionCtx, cleanup, err := c.operationGeneration(ctx, pluginID, input.Route)
 	if err != nil {
 		return "", err
 	}
+	defer cleanup()
+	streamer, ok := provider.(resource.StreamingActioner)
+	if !ok {
+		return "", ancillaryUnsupported()
+	}
+	authority, canonicalProvider := actionIdentity(input)
+	sessionCtx, _, err = c.admitOperationCatalog(sessionCtx, pluginID, provider, generation, input.Route, authority, canonicalProvider, input)
+	if err != nil {
+		return "", err
+	}
+	actionDescriptor, err := resource.ResolveActionDescriptor(sessionCtx, provider, input, true)
+	if err != nil {
+		return "", err
+	}
+	input.ExpectedDescriptor = actionDescriptor
+	if err := c.currentGeneration(sessionCtx, pluginID, generation); err != nil {
+		return "", err
+	}
 	producerCtx, cancelCause := context.WithCancelCause(context.WithoutCancel(sessionCtx))
-	cancel := func() { cancelCause(context.Canceled) }
+	stopGeneration := context.AfterFunc(generation.ctx, func() { cancelCause(context.Canceled) })
+	cancel := func() {
+		stopGeneration()
+		cancelCause(context.Canceled)
+	}
 	request, _ := invocation.FromContext(ctx)
 	reservation, err := c.actions.reserve(request, cancel)
 	if err != nil {
@@ -66,7 +91,13 @@ func (c *controller) StreamAction(ctx context.Context, pluginID, connectionID, k
 	}()
 	events := make(chan resource.ActionEvent, streamChannelBuffer)
 	result := make(chan error, 1)
-	go func() { result <- provider.StreamAction(producerCtx, key, actionID, input, events) }()
+	go func() {
+		if err := c.currentGeneration(sessionCtx, pluginID, generation); err != nil {
+			result <- err
+			return
+		}
+		result <- streamer.StreamAction(producerCtx, input, events)
+	}()
 	var completed bool
 	var resultErr error
 	for {
@@ -103,6 +134,9 @@ func (c *controller) StreamAction(ctx context.Context, pluginID, connectionID, k
 			if err == nil && !time.Now().Before(startupDeadline) {
 				err = context.DeadlineExceeded
 			}
+			if err == nil {
+				err = c.currentGeneration(sessionCtx, pluginID, generation)
+			}
 			var handle *actionHandle
 			if err == nil {
 				handle, err = c.actions.commit(reservation, producerCtx)
@@ -115,7 +149,7 @@ func (c *controller) StreamAction(ctx context.Context, pluginID, connectionID, k
 			stopOpen()
 			startup.Stop()
 			transferred = true
-			go c.runActionStream(producerCtx, handle, events, result, completed, resultErr)
+			go c.runActionStream(producerCtx, handle, events, result, completed, resultErr, actionDescriptor)
 			return handle.id, nil
 		}
 	}
@@ -135,7 +169,11 @@ func actionEvent(event resource.ActionEvent, requestID string) (ActionEventDTO, 
 	if event.Type != "progress" && event.Type != "output" && event.Type != "complete" {
 		return ActionEventDTO{}, actionProtocolError("The provider sent an invalid action event.")
 	}
-	encoded, err := json.Marshal(ActionSnapshot{Sequence: 9007199254740991, Event: ActionEventDTO{Type: event.Type, Data: event.Data}, Terminal: true})
+	data := event.Data
+	if data == nil && event.Type != "complete" {
+		return ActionEventDTO{}, actionProtocolError("The provider omitted action data.")
+	}
+	encoded, err := json.Marshal(ActionSnapshot{Sequence: 9007199254740991, Event: ActionEventDTO{Type: event.Type, Data: data}, Terminal: true})
 	if err != nil {
 		return ActionEventDTO{}, actionProtocolError("The provider sent invalid action data.")
 	}
@@ -148,13 +186,13 @@ func actionEvent(event resource.ActionEvent, requestID string) (ActionEventDTO, 
 	}
 	return snapshot.Event, nil
 }
-func (c *controller) runActionStream(ctx context.Context, handle *actionHandle, events <-chan resource.ActionEvent, result <-chan error, completed bool, resultErr error) {
+func (c *controller) runActionStream(ctx context.Context, handle *actionHandle, events <-chan resource.ActionEvent, result <-chan error, completed bool, resultErr error, descriptor *resource.ActionDescriptor) {
 	for {
 		if completed && len(events) == 0 {
 			if resultErr != nil {
 				c.actions.update(handle, ActionEventDTO{Type: "error", Error: apperror.ForResource(resultErr, handle.request.ID())}, true)
 			} else {
-				c.actions.update(handle, ActionEventDTO{Type: "complete", Data: map[string]any{"message": "Completed"}}, true)
+				c.actions.update(handle, ActionEventDTO{Type: "complete"}, true)
 			}
 			return
 		}
@@ -171,6 +209,9 @@ func (c *controller) runActionStream(ctx context.Context, handle *actionHandle, 
 				continue
 			}
 			safe, err := actionEvent(event, handle.request.ID())
+			if err == nil && descriptor != nil && event.Type == "output" && event.Data != nil {
+				err = resource.ValidateActionOutput(*descriptor, *event.Data)
+			}
 			if err != nil {
 				safe = ActionEventDTO{Type: "error", Error: apperror.ForResource(err, handle.request.ID())}
 			}

@@ -1,175 +1,38 @@
-import { type FC } from 'react';
+import { Spinner, Text } from '@omniviewdev/base-ui';
+import { parseAppError, useResourceType } from '@omniviewdev/runtime';
+import EnumerableResourceTable from './EnumerableResourceTable';
+import ResourceLookup from './ResourceLookup';
 
-import { Banner, Heading, Spinner, Stack, Text } from '@omniviewdev/base-ui';
+type Props = { pluginID: string; connectionID: string; resourceKey: string };
 
-// icons
-import { LuCircleAlert } from 'react-icons/lu';
-
-// project imports
-import useResourceDefinition from '@/hooks/resource/useResourceDefinition';
-import { useResources } from '@omniviewdev/runtime';
-import ResourceTableContainer from './ResourceTableContainer';
-import styles from './index.module.css';
-
-
-type Props = {
-  /**
-   * The plugin ID
-   */
-  pluginID: string;
-  /**
-   * The connection ID
-   */
-  connectionID: string;
-  /**
-   * The resource key that uniquely identifies the resource
-   */
-  resourceKey: string;
-};
-
-/**
- * if for some reasong the plugin developer hasn't supplied an id accessor, attempt to fix it for them
- */
-const wellKnownIDAccessors = (data: any) => {
-  if (data.id) {
-    return 'id';
+// Mount only the advertised acquisition path. Get-only resources do not acquire
+// enumerable targets, presentation definitions, or visible-row watches.
+const ResourceTable = ({ pluginID, connectionID, resourceKey }: Props) => {
+  const { resourceType } = useResourceType({ pluginID, route: { connection: connectionID }, type: resourceKey });
+  if (resourceType.isLoading) {
+    return <Spinner size="xl" />;
   }
 
-  if (data.Id) {
-    return 'Id';
+  if (resourceType.isError) {
+    return <Text tone="danger">{parseAppError(resourceType.error).detail}</Text>;
   }
 
-  if (data.metadata?.name) {
-    return 'metadata.name';
-  }
-
-  if (data.metadata?.uid) {
-    return 'metadata.uid';
-  }
-
-  if (data.metadata?.id) {
-    return 'metadata.id';
-  }
-
-  if (data.id) {
-    return 'id';
-  }
-
-  throw new Error('No ID accessor found, and no well known ID accessors found');
-};
-
-/**
- * Display a table of the deployments
- */
-const ResourceTable: FC<Props> = ({ pluginID, connectionID, resourceKey }) => {
-  if (!pluginID || !connectionID || !resourceKey) {
+  const descriptor = resourceType.data;
+  if (!descriptor) {
     return null;
   }
 
-  const { isLoading, isError, data, columns, namespaces } = useResourceDefinition({ pluginID, connectionID, resourceKey });
-  const { resources } = useResources({ pluginID, connectionID, resourceKey });
-
-  // TODO: replace these with loaders
-  if (isLoading || resources.isLoading || namespaces.isLoading) {
-    console.log('Loading resources...');
-    return (
-      <div className={styles.Loading}>
-        <Spinner size='xl' />
-        <Text weight="semibold" size="lg">
-          Loading {resourceKey} resources...
-        </Text>
-      </div>
-    );
+  const props = { pluginID, connectionID, resourceKey, resourceType: descriptor };
+  const key = JSON.stringify([pluginID, connectionID, resourceKey]);
+  if (descriptor.capabilities.some(({ operation }) => operation === 'enumerate')) {
+    return <EnumerableResourceTable key={key} {...props} />;
   }
 
-  if (isError || resources.isError) {
-    // Wails may reject with a bare string; toString() covers both shapes.
-    const errstring = resources.error?.toString() ?? '';
-    console.error('Failed loading resources', errstring);
-
-    // Try to parse structured error JSON from the plugin (ResourceOperationError.Error()
-    // returns JSON that survives the Wails boundary).
-    let title = 'Failed to load resources';
-    let detail = errstring;
-    let suggestions: string[] = [];
-
-    try {
-      const parsed = JSON.parse(errstring);
-      if (parsed && typeof parsed.code === 'string' && typeof parsed.title === 'string') {
-        title = parsed.title;
-        detail = parsed.message ?? errstring;
-        suggestions = Array.isArray(parsed.suggestions) ? parsed.suggestions : [];
-      }
-    } catch {
-      // Not JSON — use raw string as detail (fallback for unstructured errors).
-    }
-
-    return (
-      <div className={styles.Error}>
-        <Banner variant='soft' size='lg' color='danger'>
-          <Banner.Icon>
-            <LuCircleAlert size={20} />
-          </Banner.Icon>
-          <Banner.Content>
-            <Heading level={4} tone='danger'>
-              {title}
-            </Heading>
-          </Banner.Content>
-        </Banner>
-        <Stack direction="column" spacing={2} className={styles.ErrorDetails}>
-          <Text size='sm' tone='muted'>
-            {detail}
-          </Text>
-          {suggestions.length > 0 && (
-            <ul className={styles.Suggestions}>
-              {suggestions.map((s) => (
-                <li key={s} className={styles.Suggestion}>
-                  <Text size='xs' tone='muted'>{s}</Text>
-                </li>
-              ))}
-            </ul>
-          )}
-          <Text size='xs' tone='subtle' className={styles.RawError}>
-            {resourceKey}: {errstring || 'Unknown error'}
-          </Text>
-        </Stack>
-      </div>
-    );
+  if (descriptor.capabilities.some(({ operation }) => operation === 'get')) {
+    return <ResourceLookup key={key} {...props} />;
   }
 
-  const listResult = resources.data;
-  if (!listResult || !data || !columns.defs.length) {
-    return null;
-  }
-
-  /**
-   * if for some reasong the plugin developer hasn't supplied an id accessor, attempt to fix it for them
-   * @returns {string} the id accessor
-   * @throws {Error} if no id accessor is found and no well known id accessors are found in the first object
-   */
-  const getIDAccessor = (): string => {
-    if (data.id_accessor) {
-      return data.id_accessor;
-    }
-
-    // attempt to find a well known id accessor
-    return wellKnownIDAccessors(listResult.result[0]);
-  };
-
-  return (
-    <ResourceTableContainer
-      columns={columns.defs}
-      data={Object.values(listResult.result)}
-      namespaces={namespaces.data ?? []}
-      idAccessor={getIDAccessor()}
-      namespaceAccessor={data.namespace_accessor}
-      memoizer={data.memoizer_accessor}
-      pluginID={pluginID}
-      connectionID={connectionID}
-      resourceKey={resourceKey}
-      initialColumnVisibility={columns.visibility}
-    />
-  );
+  return <Text>{descriptor.displayName || resourceKey}: Catalog only. No enumerate or get operation is advertised.</Text>;
 };
 
 export default ResourceTable;

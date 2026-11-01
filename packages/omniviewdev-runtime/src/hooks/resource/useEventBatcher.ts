@@ -1,181 +1,158 @@
-import { useCallback, useEffect, useRef } from 'react';
-import type { QueryClient, QueryKey } from '@tanstack/react-query';
-import get from 'lodash.get';
-import type { WatchState } from '../../types/watch';
+import { useCallback, useLayoutEffect, useMemo, useRef } from 'react';
+import { hashKey, type QueryClient, type QueryKey } from '@tanstack/react-query';
+import type { HostRecord, HostWatchAddPayload, HostWatchDeletePayload, HostWatchUpdatePayload, ResourceView } from '../../resource/v2/host';
+import { WatchState } from '../../types/watch';
 
-// Re-use the payload shapes already defined in useResources.
-export type AddPayload = {
-  data: any;
-  key: string;
-  connection: string;
-  id: string;
-  namespace: string;
-};
-
-export type UpdatePayload = {
-  data: any;
-  key: string;
-  connection: string;
-  id: string;
-  namespace: string;
-};
-
-export type DeletePayload = {
-  data: any;
-  key: string;
-  connection: string;
-  id: string;
-  namespace: string;
-};
-
-export type ResourceEvent =
+export type AddPayload = HostWatchAddPayload;
+export type UpdatePayload = HostWatchUpdatePayload;
+export type DeletePayload = HostWatchDeletePayload;
+export type ResourceUpdateEvent =
   | { type: 'ADD'; payload: AddPayload }
   | { type: 'UPDATE'; payload: UpdatePayload }
   | { type: 'DELETE'; payload: DeletePayload };
 
-/**
- * Apply a batch of resource events to a list query cache entry.
- * Extracted for testability — this is the core batching logic.
- *
- * Returns a new plain object (immutable-style) without relying on Immer,
- * avoiding issues with Wails binding class instances that Immer cannot draft.
- */
-export function applyBatch(
-  oldData: any,
-  events: ResourceEvent[],
-  idAccessor: string,
-): any {
-  const base = oldData ?? { result: [], success: true, totalCount: 0 };
-  // Shallow-copy the result array so we never mutate the cached version.
-  const result = [...(base.result ?? [])];
-
+/** Explicit pages retain bounded membership; collections accept every admitted target event. */
+export function applyBatch(oldData: ResourceView | undefined, events: readonly ResourceUpdateEvent[], membershipChanged = false, collection = false): ResourceView | undefined {
+  if (!oldData || (!events.length && !membershipChanged)) return oldData;
+  if (collection) {
+    const records = new Map(oldData.records.map((row) => [row.key, row]));
+    for (const event of events) {
+      if (event.type === 'DELETE') records.delete(event.payload.key);
+      else records.set(event.payload.record.key, event.payload.record);
+    }
+    return {
+      records: [...records.values()],
+      sourcePage: oldData.sourcePage,
+      view: { guarantee: 'bestEffort', count: { kind: 'unknown' }, membershipStale: false },
+    };
+  }
+  let records: HostRecord[] | undefined;
+  const positions = events.length > 1 ? new Map(oldData.records.map((row, index) => [row.key, index])) : undefined;
+  const deleted = new Set<number>();
+  let membershipStale = oldData.view?.membershipStale === true || membershipChanged;
   for (const event of events) {
-    const eventId = get(event.payload.data, idAccessor);
-
-    switch (event.type) {
-      case 'ADD': {
-        const idx = result.findIndex((item: any) => get(item, idAccessor) === eventId);
-        if (idx === -1) {
-          result.push(event.payload.data);
-        }
-        break;
-      }
-      case 'UPDATE': {
-        const idx = result.findIndex((item: any) => get(item, idAccessor) === eventId);
-        if (idx !== -1) {
-          result[idx] = event.payload.data;
-        }
-        break;
-      }
-      case 'DELETE': {
-        const idx = result.findIndex((item: any) => get(item, idAccessor) === eventId);
-        if (idx !== -1) {
-          result.splice(idx, 1);
-        }
-        break;
+    const key = event.type === 'DELETE' ? event.payload.key : event.payload.record.key;
+    const index = positions ? positions.get(key) ?? -1 : oldData.records.findIndex((row) => row.key === key);
+    if (event.type === 'DELETE') {
+      if (index !== -1) deleted.add(index);
+      // A deleted member can leave a page gap; unknown incarnations are never inferred.
+      membershipStale = true;
+    } else if (index === -1 || deleted.has(index)) {
+      membershipStale = true;
+    } else {
+      if ((records ?? oldData.records)[index] !== event.payload.record) {
+        records ??= [...oldData.records];
+        records[index] = event.payload.record;
       }
     }
   }
-
-  return { ...base, result };
+  if (!records && !deleted.size && oldData.view?.membershipStale === membershipStale &&
+    oldData.view.guarantee === 'bestEffort' && oldData.view.count.kind === 'unknown' && oldData.view.sourceRevision === undefined) return oldData;
+  const rows = records ?? oldData.records;
+  return {
+    records: deleted.size ? rows.filter((_, index) => !deleted.has(index)) : rows,
+    sourcePage: oldData.sourcePage,
+    view: { guarantee: 'bestEffort', count: { kind: 'unknown' }, membershipStale },
+  };
 }
 
-/**
- * Adaptive two-mode event batcher for resource watch events.
- *
- * **Mode 1 — Initial Sync (SYNCING state):** Uses `setTimeout` with a larger
- * window (default 500ms) to batch the initial ADD flood into 1-2 flushes.
- * Satisfies REQ-BATCH-2.
- *
- * **Mode 2 — Live Updates (all other states):** Races `requestAnimationFrame`
- * against the same bounded window, retaining next-frame batching while allowing
- * already-delivered data to progress when painting is withheld but timers run.
- * This does not promise progress while the entire event loop is frozen.
- *
- * Mode transitions happen automatically when `watchState` changes.
- * Pending timers flush normally; subsequent events use the new scheduling.
- */
+/** Keep only the latest event for each key within the active acquisition. */
 export function useEventBatcher(
   queryClient: QueryClient,
   queryKey: QueryKey,
-  getResourceKey: (id: string, ns: string) => QueryKey,
-  idAccessor: string | undefined,
   watchState: WatchState,
-  options?: { syncWindowMs?: number },
+  options?: { syncWindowMs?: number; enabled?: boolean; isCurrent?: () => boolean; collection?: boolean },
 ) {
-  const syncWindowMs = options?.syncWindowMs ?? 500;
-
-  const bufferRef = useRef<ResourceEvent[]>([]);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const rafRef = useRef<number | null>(null);
-
-  // Track watchState in a ref so flush callback always reads the latest
-  // value without needing to be re-created on every state change.
-  const stateRef = useRef(watchState);
-  stateRef.current = watchState;
-
+  const buffer = useRef(new Map<string, ResourceUpdateEvent>());
+  const pendingMembershipChange = useRef(false);
+  const timer = useRef<number | undefined>(undefined);
+  const frame = useRef<number | undefined>(undefined);
+  const state = useRef(watchState);
+  const enabled = options?.enabled ?? true;
+  const isCurrent = options?.isCurrent;
+  const collection = options?.collection ?? false;
+  const scope = useMemo(() => ({ queryClient, queryKey, enabled, isCurrent, collection }), [queryClient, queryKey, enabled, isCurrent, collection]);
+  const activeScope = useRef<typeof scope | undefined>(undefined);
+  const current = useCallback(() => activeScope.current === scope && enabled && (!isCurrent || isCurrent()), [scope, enabled, isCurrent]);
+  useLayoutEffect(() => {
+    state.current = watchState;
+  }, [watchState]);
+  const windowMs = options?.syncWindowMs ?? 500;
   const flush = useCallback(() => {
-    const events = bufferRef.current;
-    bufferRef.current = [];
-    if (timerRef.current !== null) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
+    // A late callback must not drain or cancel a newer scope's work.
+    if (activeScope.current !== scope) return;
+    window.clearTimeout(timer.current);
+    if (frame.current !== undefined) cancelAnimationFrame(frame.current);
+    timer.current = undefined;
+    frame.current = undefined;
+    if (!current()) {
+      buffer.current.clear();
+      pendingMembershipChange.current = false;
+      return;
     }
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
+    if (!buffer.current.size && !pendingMembershipChange.current) return;
+    if (!queryClient.getQueryData<ResourceView>(queryKey)) return;
+    // Apply observations received during collection refresh after its snapshot settles.
+    if (collection && queryClient.getQueryState(queryKey)?.fetchStatus === 'fetching') return;
+    const events = [...buffer.current.values()];
+    const membershipChanged = pendingMembershipChange.current;
+    buffer.current.clear();
+    pendingMembershipChange.current = false;
+    const query = queryClient.getQueryCache().find<ResourceView>({ queryKey, exact: true });
+    if (collection && query?.state.status === 'error') {
+      // Advisory updates do not turn a failed native acquisition into success.
+      query.setState({ data: current() ? applyBatch(query.state.data, events, membershipChanged, collection) : query.state.data });
+    } else {
+      queryClient.setQueryData<ResourceView>(queryKey, (old) => current() ? applyBatch(old, events, membershipChanged, collection) : old);
     }
-
-    if (events.length === 0 || !idAccessor) return;
-
-    // Single cache update for the list query.
-    queryClient.setQueryData(queryKey, (oldData: any) =>
-      applyBatch(oldData, events, idAccessor),
-    );
-
-    // Update individual resource caches.
     for (const event of events) {
-      if (event.type === 'ADD' || event.type === 'UPDATE') {
-        queryClient.setQueryData(
-          getResourceKey(event.payload.id, event.payload.namespace),
-          { success: true, result: event.payload.data },
+      if (!current()) return;
+      if (event.type === 'DELETE') {
+        void queryClient.invalidateQueries({
+          queryKey: [queryKey[0], 'resource-v2', 'get'],
+          predicate: (query) => current() && (query.state.data as HostRecord | undefined)?.key === event.payload.key,
+        });
+      } else {
+        queryClient.setQueriesData<HostRecord>({ queryKey: [queryKey[0], 'resource-v2', 'get'] }, (old) =>
+          current() && old?.key === event.payload.record.key ? event.payload.record : old,
         );
       }
     }
-  }, [queryClient, queryKey, getResourceKey, idAccessor]);
-
-  const enqueue = useCallback(
-    (event: ResourceEvent) => {
-      bufferRef.current.push(event);
-
-      // Already have a pending flush scheduled — just buffer.
-      if (timerRef.current !== null || rafRef.current !== null) {
-        return;
-      }
-
-      // One timer bounds both modes; live updates normally win on the next frame.
-      // Whichever callback flushes first cancels the other schedule.
-      timerRef.current = setTimeout(flush, syncWindowMs);
-      if (stateRef.current !== 1) {
-        rafRef.current = requestAnimationFrame(flush);
-      }
-    },
-    [flush, syncWindowMs],
-  );
-
-  // Cancel pending timer/RAF on unmount.
-  useEffect(() => {
+  }, [queryClient, queryKey, scope, current, collection]);
+  const enqueue = useCallback((event: ResourceUpdateEvent) => {
+    if (!current()) return;
+    const key = event.type === 'DELETE' ? event.payload.key : event.payload.record.key;
+    const baseline = queryClient.getQueryData<ResourceView>(queryKey);
+    if (collection || baseline?.records.some((row) => row.key === key)) buffer.current.set(key, event);
+    else pendingMembershipChange.current = true;
+    if (!collection && event.type === 'DELETE') pendingMembershipChange.current = true;
+    if (timer.current !== undefined || frame.current !== undefined) return;
+    // A timer also bounds live mode when Chromium withholds animation frames.
+    timer.current = window.setTimeout(flush, windowMs);
+    if (state.current !== WatchState.WatchStateSyncing) frame.current = requestAnimationFrame(flush);
+  }, [queryClient, queryKey, flush, windowMs, current, collection]);
+  useLayoutEffect(() => {
+    if (!enabled) return;
+    activeScope.current = scope;
+    const pendingEvents = buffer.current;
+    const cancel = queryClient.getQueryCache().subscribe((event) => {
+      if (!current() || event.type !== 'updated' || event.query.queryHash !== hashKey(queryKey)) return;
+      if (event.action.type === 'fetch') {
+        // A new native acquisition supersedes older queued advisory observations.
+        pendingEvents.clear();
+        pendingMembershipChange.current = false;
+      } else if (event.action.type === 'success' || (collection && event.action.type === 'error')) flush();
+    });
     return () => {
-      if (timerRef.current !== null) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
+      activeScope.current = undefined;
+      cancel();
+      window.clearTimeout(timer.current);
+      if (frame.current !== undefined) cancelAnimationFrame(frame.current);
+      pendingEvents.clear();
+      pendingMembershipChange.current = false;
+      timer.current = undefined;
+      frame.current = undefined;
     };
-  }, []);
-
+  }, [queryClient, queryKey, flush, enabled, scope, current, collection]);
   return enqueue;
 }

@@ -2,7 +2,7 @@ import React from 'react';
 import { Events } from '@wailsio/runtime';
 
 import { PluginContext } from './PluginContext';
-import { PluginValues } from '../../bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/settings/servicewrapper';
+import { useScopedSettings } from '../../hooks/settings/useScopedSettings';
 import { PluginMeta } from '../../bindings/github.com/omniviewdev/plugin-sdk/pkg/config/models';
 import { GetPluginMeta } from '../../bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/servicewrapper';
 import { parseAppError } from '../../errors/parseAppError';
@@ -14,38 +14,23 @@ export type PluginContextProviderProps = {
 };
 
 export function PluginContextProvider(props: React.PropsWithChildren<PluginContextProviderProps>): React.ReactElement | null {
+  return <PluginContextSession key={props.pluginId} {...props} />;
+}
+
+function PluginContextSession(props: React.PropsWithChildren<PluginContextProviderProps>): React.ReactElement | null {
   const { children, pluginId, headless = false } = props;
-  const [settings, setSettings] = React.useState<Record<string, any>>({});
+  const { categories } = useScopedSettings({ kind: 'plugin', pluginId });
+  const settings = React.useMemo(() => Object.fromEntries(
+    Object.entries(categories.plugin?.settings ?? {}).filter(([, setting]) => setting !== undefined)
+      .map(([id, setting]) => [`${pluginId}.${id}`, setting!.value]),
+  ), [categories, pluginId]);
   const [meta, setMeta] = React.useState<PluginMeta>(new PluginMeta);
   const [metaLoaded, setMetaLoaded] = React.useState(false);
   const [metaError, setMetaError] = React.useState<string | null>(null);
-  const settingsRequest = React.useRef(0);
   const metadataRequest = React.useRef(0);
 
   console.debug(`[PluginContextProvider] render`, { pluginId, metaLoaded, metaError: !!metaError });
 
-  /**
-   * Fetch the settings from the backend stores
-   */
-  const fetchSettings = React.useCallback(() => {
-    if (pluginId === undefined || pluginId === '') {
-      return
-    }
-    const request = ++settingsRequest.current;
-
-    console.debug(`[PluginContextProvider] fetching settings for "${pluginId}"`);
-    PluginValues(pluginId)
-      .then((values) => {
-        if (request !== settingsRequest.current) return;
-        console.debug(`[PluginContextProvider] settings loaded for "${pluginId}"`, Object.keys(values));
-        setSettings(values)
-      })
-      .catch((error: unknown) => {
-        if (request !== settingsRequest.current) return;
-        const appErr = parseAppError(error);
-        console.error(`[PluginContextProvider] error fetching settings for "${pluginId}":`, appErr.detail);
-      })
-  }, [pluginId]);
 
   /**
    * Fetch the metadata for the plugin from the backend stores
@@ -58,7 +43,6 @@ export function PluginContextProvider(props: React.PropsWithChildren<PluginConte
     const request = ++metadataRequest.current;
 
     console.debug(`[PluginContextProvider] fetching meta for "${pluginId}"`);
-    setMetaError(null);
 
     GetPluginMeta(pluginId)
       .then((values) => {
@@ -81,7 +65,7 @@ export function PluginContextProvider(props: React.PropsWithChildren<PluginConte
     // must not be replaced by a candidate before its install transaction commits.
     if (metaLoaded) return;
     const refresh = () => {
-      fetchSettings();
+      setMetaError(null);
       fetchMeta();
     };
     const cleanups = [
@@ -94,20 +78,15 @@ export function PluginContextProvider(props: React.PropsWithChildren<PluginConte
     return () => {
       for (const stop of cleanups) stop();
     };
-  }, [pluginId, metaLoaded, fetchSettings, fetchMeta]);
+  }, [pluginId, metaLoaded, fetchMeta]);
 
   React.useEffect(() => {
     console.debug(`[PluginContextProvider] useEffect — pluginId changed to "${pluginId}"`);
-    setMetaLoaded(false);
-    setMetaError(null);
-    setSettings({});
-    fetchSettings();
     fetchMeta();
     return () => {
-      ++settingsRequest.current;
       ++metadataRequest.current;
     };
-  }, [pluginId, fetchSettings, fetchMeta]);
+  }, [pluginId, fetchMeta]);
 
   if (metaError) {
     if (headless) throw new Error(metaError);
@@ -142,7 +121,10 @@ export function PluginContextProvider(props: React.PropsWithChildren<PluginConte
             {metaError}
           </p>
           <button
-            onClick={() => fetchMeta()}
+            onClick={() => {
+              setMetaError(null);
+              fetchMeta();
+            }}
             style={{
               background: 'transparent',
               color: '#F87171',

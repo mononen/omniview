@@ -12,7 +12,10 @@ import {
   getNavigationHref,
   isSearchQueryAllowed,
 } from './admission';
+import type { OpenDisposition } from '@/features/workspace/newTab/openDisposition';
+import { isNewTabRegistration } from './catalogue';
 import { GLOBAL_SEARCH_EXTENSION_POINT_ID } from './extensionPoint';
+import { containsScope, scopeConnection } from './scope';
 import type {
   SearchEntryV1,
   SearchFeedback,
@@ -32,6 +35,8 @@ type ControllerDependencies = {
   listResourcePlugins: () => Promise<readonly string[]>;
   loadConnections: (pluginId: string) => Promise<unknown>;
   navigate: (href: string) => void;
+  /** Opens a "New <plugin> tab" entry's destination outside the active tab. */
+  openNew: (href: string, disposition: OpenDisposition) => void;
   openResource?: (target: Extract<SearchScopeV1, { kind: 'resource' }>, signal: AbortSignal, validateData?: (data: unknown) => boolean) => Promise<void>;
 };
 
@@ -46,7 +51,8 @@ export type GlobalSearchController = {
   notifyDataChanged: () => void;
   retrySource: (sourceID: string) => void;
   setProviderContextError: (sourceID: string, message?: string) => boolean;
-  activate: (key: string) => Promise<void>;
+  /** `disposition` applies to "New <plugin> tab" rows only; they default to a new tab. */
+  activate: (key: string, disposition?: OpenDisposition) => Promise<void>;
   getSnapshot: () => SearchSnapshot;
   subscribe: (listener: () => void) => () => void;
   dispose: () => void;
@@ -183,8 +189,17 @@ function staticScore(query: string, label: string, value: SearchEntryV1): number
 }
 
 function sameIntent(left: SearchEntryV1, right: SearchEntryV1): boolean {
+  if (Boolean(left.scope) !== Boolean(right.scope)
+    || left.scope && right.scope && (!containsScope(left.scope, right.scope) || !containsScope(right.scope, left.scope))) {
+    return false;
+  }
+
   if (left.kind === 'action' && right.kind === 'action') {
-    return JSON.stringify(left.action) === JSON.stringify(right.action);
+    return left.action.id === right.action.id && left.action.query === right.action.query
+      && left.action.recovery === right.action.recovery
+      && left.action.target.kind === right.action.target.kind
+      && containsScope(left.action.target, right.action.target)
+      && containsScope(right.action.target, left.action.target);
   }
 
   if (left.kind === 'command' && right.kind === 'command') {
@@ -229,12 +244,14 @@ function sameIntent(left: SearchEntryV1, right: SearchEntryV1): boolean {
 
 export function createGlobalSearchController(deps: ControllerDependencies): GlobalSearchController {
   let snapshot: SearchSnapshot = { isOpen: false, query: '', scopes: [], rows: [], sources: [], searchPending: false, executionPending: false };
-  const parents: Array<{ query: string; selectedKey?: string }> = [];
+  const parents: Array<{ query: string; selectedKey?: string; rows?: Map<string, { key: string; value: SearchEntryV1 }> }> = [];
   let actionExecution: AbortController | undefined;
   let actionAccepted = false;
   let deferredLiveRefresh = false;
   const registrationIds = new WeakMap<ExtensionContributionRegistration, number>();
   let nextRegistrationId = 0;
+  let nextRowId = 0;
+  let priorRows = new Map<string, { key: string; value: SearchEntryV1 }>();
   const listeners = new Set<() => void>();
   let store: ExtensionPointStoreContract | undefined;
   let unsubscribeStore: (() => void) | undefined;
@@ -266,18 +283,6 @@ export function createGlobalSearchController(deps: ControllerDependencies): Glob
   const retainedItems = new Map<ExtensionContributionRegistration, AcceptedEntry[]>();
   const contextErrors = new WeakMap<ExtensionContributionRegistration, string>();
 
-  function scopeIdentity(scope: SearchScopeV1 | undefined) {
-    if (!scope) {
-      return undefined;
-    }
-
-    if (scope.kind === 'connection') {
-      return { kind: scope.kind, pluginId: scope.pluginId, connectionId: scope.connectionId };
-    }
-
-    const { label: _label, scopeLabel: _scopeLabel, ...identity } = scope;
-    return identity;
-  }
 
   function emit() {
     for (const listener of listeners) {
@@ -345,15 +350,10 @@ export function createGlobalSearchController(deps: ControllerDependencies): Glob
 
     if (value.kind === 'action' && value.action.recovery === 'connection') {
       return target.kind === 'connection' && owner === parent.pluginId &&
-        target.pluginId === parent.pluginId && target.connectionId === parent.connectionId;
+        target.pluginId === parent.pluginId && target.connectionId === scopeConnection(parent);
     }
 
-    return target.pluginId === parent.pluginId && target.connectionId === parent.connectionId &&
-      (parent.kind === 'connection' || (target.kind !== 'connection' && target.resourceKey === parent.resourceKey)) &&
-      (parent.kind !== 'resource-type' || target.kind !== 'resource' || !parent.namespaces?.length || parent.namespaces.includes(target.namespace)) &&
-      (parent.kind !== 'resource-type' || target.kind !== 'resource-type' || !parent.namespaces?.length ||
-        !!target.namespaces?.length && target.namespaces.every((namespace) => parent.namespaces!.includes(namespace))) &&
-      (parent.kind !== 'resource' || (target.kind === 'resource' && target.resourceId === parent.resourceId && target.namespace === parent.namespace && target.uid === parent.uid));
+    return containsScope(parent, target);
   }
 
   function publish() {
@@ -367,6 +367,7 @@ export function createGlobalSearchController(deps: ControllerDependencies): Glob
     actions.clear();
     const sources = [...otherSources];
     let clipped = displayOverflow;
+    const nextRows = new Map<string, { key: string; value: SearchEntryV1 }>();
     function append(entry: AcceptedEntry) {
       if (rows.length >= 100) {
         clipped = true;
@@ -377,10 +378,14 @@ export function createGlobalSearchController(deps: ControllerDependencies): Glob
         registrationIds.set(entry.registration, ++nextRegistrationId);
       }
 
-      const key = encodeURIComponent(
-        JSON.stringify([registrationIds.get(entry.registration), entry.registration.plugin, entry.registration.id, entry.itemId, scopeIdentity(entry.value.scope), entry.value.kind === 'action' ? { ...entry.value.action, target: scopeIdentity(entry.value.action.target) } : undefined]),
-      );
-      rows.push({ key, label: entry.label, value: entry.value, disabledReason: disabledReason(entry.value) });
+      const itemKey = JSON.stringify([registrationIds.get(entry.registration), entry.itemId]);
+      const prior = priorRows.get(itemKey);
+      const key = prior && sameIntent(prior.value, entry.value) ? prior.key : String(++nextRowId);
+      nextRows.set(itemKey, { key, value: entry.value });
+      rows.push({
+        key, label: entry.label, value: entry.value, disabledReason: disabledReason(entry.value),
+        ...(isNewTabRegistration(entry.registration) ? { opensNewTab: true as const } : {}),
+      });
       actions.set(key, entry);
     }
 
@@ -422,7 +427,9 @@ export function createGlobalSearchController(deps: ControllerDependencies): Glob
     }
 
     if (!snapshot.scopes.length) {
-      rows.sort((left, right) => (right.value.scope?.kind === 'connection' ? 1 : 0) - (left.value.scope?.kind === 'connection' ? 1 : 0));
+      // Unscoped: connections lead, except that an empty query starts with the "New <plugin> tab" rows.
+      const rank = (row: SearchRow) => row.opensNewTab && !snapshot.query.trim() ? 2 : row.value.scope?.kind === 'connection' ? 1 : 0;
+      rows.sort((left, right) => rank(right) - rank(left));
     }
 
     const messages: string[] = [];
@@ -453,6 +460,9 @@ export function createGlobalSearchController(deps: ControllerDependencies): Glob
     } else {
       retainQueryRows = false;
       resetQuerySelection = false;
+      if (!searchPending) {
+        priorRows = nextRows;
+      }
     }
 
     snapshot = {
@@ -521,11 +531,12 @@ export function createGlobalSearchController(deps: ControllerDependencies): Glob
       } else {
         attempt.source.state = response.status && response.status !== 'ready' ? response.status : response.completion;
         attempt.source.message = response.message;
+        const actionPrefix = `${attempt.registration.plugin}:`;
         attempt.items = response.items
           .filter((item) => withinScope(item.value, attempt.registration.plugin) &&
             (item.value.kind !== 'action' || !!attempt.provider.executeAction &&
-              item.value.action.id.startsWith(`${attempt.registration.plugin}:`) &&
-              item.value.action.id.length > attempt.registration.plugin.length + 1))
+              item.value.action.id.startsWith(actionPrefix) &&
+              item.value.action.id.length > actionPrefix.length))
           .map((item: SearchProviderItemV1) => ({
             registration: attempt.registration,
             label: item.label,
@@ -574,7 +585,7 @@ export function createGlobalSearchController(deps: ControllerDependencies): Glob
             query: snapshot.query,
             signal: attempt.controller.signal,
             limit: 20,
-            scopes: Object.freeze(snapshot.scopes.map((scope) => Object.freeze(scope.kind === 'resource-type' && scope.namespaces ? { ...scope, namespaces: Object.freeze([...scope.namespaces]) } : { ...scope }))),
+            scopes: Object.freeze(snapshot.scopes.map(scope => Object.freeze(admitSearchScope(scope)!))),
             generation: token,
           }),
         ).then(
@@ -629,6 +640,7 @@ export function createGlobalSearchController(deps: ControllerDependencies): Glob
     if (unavailableScope !== -1) {
       const parent = parents[unavailableScope];
       snapshot = { ...snapshot, scopes: snapshot.scopes.slice(0, unavailableScope), query: parent?.query ?? snapshot.query, selectedKey: parent?.selectedKey };
+      priorRows = parent?.rows ?? new Map();
       parents.length = unavailableScope;
       feedback = { message: 'The scoped plugin is unavailable. Choose another connection.' };
     }
@@ -717,7 +729,7 @@ export function createGlobalSearchController(deps: ControllerDependencies): Glob
 
         if (value.supportsScope) {
           try {
-            const supported = value.supportsScope.call(registration.value, Object.freeze(snapshot.scopes.map((scope) => Object.freeze({ ...scope, ...(scope.kind === 'resource-type' && scope.namespaces ? { namespaces: Object.freeze([...scope.namespaces]) } : {}) }))));
+            const supported = value.supportsScope.call(registration.value, Object.freeze(snapshot.scopes.map(scope => Object.freeze(admitSearchScope(scope)!))));
             if (typeof supported !== 'boolean') {
               otherSources.push({ id: registration.id, label: registration.label, state: 'unavailable' });
               continue;
@@ -872,12 +884,10 @@ export function createGlobalSearchController(deps: ControllerDependencies): Glob
       const scopes: SearchScopeV1[] = [];
       if (initialScope) {
         if (initialScope.kind !== 'connection') {
-          scopes.push({ kind: 'connection', pluginId: initialScope.pluginId, connectionId: initialScope.connectionId, label: initialScope.connectionId });
+          const connectionId = scopeConnection(initialScope);
+          scopes.push({ kind: 'connection', pluginId: initialScope.pluginId, connectionId, label: connectionId });
         }
 
-        if (initialScope.kind === 'resource') {
-          scopes.push({ kind: 'resource-type', pluginId: initialScope.pluginId, connectionId: initialScope.connectionId, resourceKey: initialScope.resourceKey, label: initialScope.resourceKey });
-        }
 
         scopes.push(initialScope);
       }
@@ -940,7 +950,7 @@ export function createGlobalSearchController(deps: ControllerDependencies): Glob
         return false;
       }
 
-      parents.push({ query: snapshot.query, selectedKey: snapshot.selectedKey });
+      parents.push({ query: snapshot.query, selectedKey: snapshot.selectedKey, rows: priorRows });
       snapshot = { ...snapshot, scopes: [...snapshot.scopes, scope], query: '', selectedKey: undefined };
       invalidate();
       return true;
@@ -953,6 +963,7 @@ export function createGlobalSearchController(deps: ControllerDependencies): Glob
       const parent = parents[index] ?? { query: '' };
       parents.length = index;
       snapshot = { ...snapshot, scopes: snapshot.scopes.slice(0, index), query: parent.query, selectedKey: parent.selectedKey };
+      priorRows = parent.rows ?? new Map();
       if (reason) {
         feedback = { message: reason };
       }
@@ -1066,7 +1077,7 @@ export function createGlobalSearchController(deps: ControllerDependencies): Glob
         invalidate(false, true, true);
       }
     },
-    async activate(key) {
+    async activate(key, disposition) {
       if (disposed || !snapshot.isOpen) {
         return;
       }
@@ -1150,9 +1161,6 @@ export function createGlobalSearchController(deps: ControllerDependencies): Glob
               throw new Error('Resource destination is invalid for this provider.');
             }
 
-            if (admitted.uid && !validator) {
-              throw new Error('Resource identity cannot be verified.');
-            }
 
             await deps.openResource(admitted, execution.signal, validator ? (data) => validator.call(entry.registration.value, admitted, data) : undefined);
           },
@@ -1238,7 +1246,12 @@ export function createGlobalSearchController(deps: ControllerDependencies): Glob
           return;
         }
 
-        deps.navigate(href);
+        if (isNewTabRegistration(entry.registration)) {
+          deps.openNew(href, disposition ?? 'tab');
+        } else {
+          deps.navigate(href);
+        }
+
         controller.close();
         return;
       }

@@ -25,6 +25,7 @@ import (
 	"github.com/omniviewdev/omniview/internal/instance"
 	logging "github.com/omniviewdev/plugin-sdk/log"
 	"github.com/omniviewdev/plugin-sdk/pkg/config"
+	resourceplugin "github.com/omniviewdev/plugin-sdk/pkg/resource/v2/plugin"
 	"github.com/omniviewdev/plugin-sdk/pkg/sdk"
 	sdktypes "github.com/omniviewdev/plugin-sdk/pkg/types"
 	ep "github.com/omniviewdev/plugin-sdk/pkg/v1/exec"
@@ -32,8 +33,8 @@ import (
 	lp "github.com/omniviewdev/plugin-sdk/pkg/v1/logs"
 	mp "github.com/omniviewdev/plugin-sdk/pkg/v1/metric"
 	np "github.com/omniviewdev/plugin-sdk/pkg/v1/networker"
-	rpv1 "github.com/omniviewdev/plugin-sdk/pkg/v1/resource/plugin"
 	sp "github.com/omniviewdev/plugin-sdk/pkg/v1/settings"
+	tp "github.com/omniviewdev/plugin-sdk/pkg/v1/tools"
 )
 
 // pluginStartTimeout bounds how long a plugin process may take to start, so
@@ -410,7 +411,7 @@ func (pm *pluginManager) createBackend(
 	if err != nil {
 		return nil, err
 	}
-	cmd.Env = childEnv
+	cmd.Env = pm.pluginProfilingEnvironment(childEnv)
 
 	// Ownership/root injection is unconditional, including without telemetry.
 	if pm.telemetryConfigFn != nil {
@@ -427,12 +428,13 @@ func (pm *pluginManager) createBackend(
 		HandshakeConfig: metadata.GenerateHandshakeConfig(),
 		VersionedPlugins: map[int]goplugin.PluginSet{
 			1: {
-				"resource":  &rpv1.GRPCPlugin{Plugin: nil, Impl: nil, SettingsProvider: nil},
+				"resource":  &resourceplugin.GRPCPlugin{},
 				"exec":      &ep.Plugin{Plugin: nil, Impl: nil},
 				"networker": &np.Plugin{Plugin: nil, Impl: nil},
 				"log":       &lp.Plugin{Plugin: nil, Impl: nil},
 				"metric":    &mp.Plugin{Plugin: nil, Impl: nil},
 				"settings":  &sp.SettingsPlugin{Plugin: nil, Impl: nil},
+				"tools":     &tp.Plugin{Plugin: nil, Impl: nil},
 				"lifecycle": &lc.Plugin{Plugin: nil, Impl: nil},
 			},
 		},
@@ -597,6 +599,22 @@ func (pm *pluginManager) startPlugin(record *plugintypes.PluginRecord, backend p
 
 	ctx := context.Background()
 	pluginID := record.ID
+	// Retire the previous process advertisement before any replacement startup
+	// can fail, including capability detection and manager initialization.
+	if ctrl := pm.connlessControllers[sdktypes.CapabilityTools]; ctrl != nil {
+		if err := ctrl.OnPluginStop(pluginID, record.Metadata); err != nil {
+			return fmt.Errorf("retire previous tools controller: %w", err)
+		}
+	}
+	var started []plugintypes.LifecycleController
+	committed := false
+	defer func() {
+		if !committed {
+			for i := len(started) - 1; i >= 0; i-- {
+				_ = started[i].OnPluginStop(pluginID, record.Metadata)
+			}
+		}
+	}()
 
 	// Record the negotiated SDK protocol version.
 	version := backend.NegotiatedVersion()
@@ -619,6 +637,7 @@ func (pm *pluginManager) startPlugin(record *plugintypes.PluginRecord, backend p
 	}
 
 	if ctrl := pm.connlessControllers[sdktypes.CapabilitySettings]; ctrl != nil {
+		started = append(started, ctrl)
 		if err := ctrl.OnPluginStart(pluginID, record.Metadata, backend); err != nil {
 			return fmt.Errorf("error starting settings plugin: %w", err)
 		}
@@ -646,6 +665,7 @@ func (pm *pluginManager) startPlugin(record *plugintypes.PluginRecord, backend p
 		if ctrl == nil {
 			continue
 		}
+		started = append(started, ctrl)
 		if err := ctrl.OnPluginStart(pluginID, record.Metadata, backend); err != nil {
 			return fmt.Errorf("start %s controller: %w", cap.String(), err)
 		}
@@ -656,6 +676,7 @@ func (pm *pluginManager) startPlugin(record *plugintypes.PluginRecord, backend p
 		"capabilities", record.Capabilities,
 	)
 
+	committed = true
 	return nil
 }
 

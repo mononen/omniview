@@ -1,37 +1,21 @@
-import { useQuery } from '@tanstack/react-query';
-
-// Underlying client
-import { GetResourceTypes } from '../../bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/resource/servicewrapper';
+import { skipToken, useQuery } from '@tanstack/react-query';
+import { Catalog } from '../../resource/v2/client';
+import type { AccessRoute } from '../../resource/v2/domain';
 import { useResolvedPluginId } from '../useResolvedPluginId';
+import { useConnectionReadiness } from '../connection/useConnectionReadiness';
+import { useConnectionQueryGuard } from './useConnectionQueryGuard';
 
-type UseResourceTypesOptions = {
-  /**
-   * The ID of the plugin
-   */
-  pluginID?: string;
-  /**
-  * The ID of the connection
-  */
-  connectionID: string;
-};
-
-/**
- * Fetch the resource types for a given plugin and connection.
- */
-export const useResourceTypes = ({ pluginID: explicitPluginID, connectionID }: UseResourceTypesOptions) => {
+export const useResourceTypes = ({ pluginID: explicitPluginID, route, enabled = true }: { pluginID?: string; route: AccessRoute; enabled?: boolean }) => {
   const pluginID = useResolvedPluginId(explicitPluginID);
-  const queryKey = [pluginID, 'resources', 'list', connectionID];
-
-  const types = useQuery({
-    queryKey,
-    queryFn: async () => GetResourceTypes(pluginID, connectionID),
+  const readiness = useConnectionReadiness({ pluginID, connectionID: route.connection, enabled });
+  const guardQuery = useConnectionQueryGuard(pluginID, route.connection);
+  const queryEnabled = enabled && !!pluginID && !!route.connection && readiness.phase === 'connected';
+  const resourceTypes = useQuery({
+    queryKey: [pluginID, 'resource-v2', 'catalog', route],
+    queryFn: queryEnabled ? ({ signal, queryKey }) => guardQuery(queryKey, signal, () => Catalog(pluginID, { route })) : skipToken,
+    select: (catalog) => catalog.types,
+    enabled: queryEnabled,
     retry: false,
   });
-
-  return {
-    /**
-     * The resource types for the given plugin and connection.
-     */
-    types,
-  };
+  return { resourceTypes };
 };

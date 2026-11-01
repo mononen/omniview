@@ -3,13 +3,17 @@ import { Events } from '@wailsio/runtime';
 import {
   ListAllConnections,
   GetAllConnectionStates,
-  StopConnection,
   StartConnectionWatch,
-} from '../../bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/resource/servicewrapper';
+  Catalog,
+  ResolveTarget,
+} from '../../resource/v2/client';
 import { RetryFailedPlugin } from '../../bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/servicewrapper';
 import type { Connection } from '../../bindings/github.com/omniviewdev/plugin-sdk/pkg/types/models';
 import { WatchState } from '../../types/watch';
-import type { WatchStateEvent } from '../../types/watch';
+import type { NativeConnectionReadiness, HostConnectionState, HostWatchStateEvent } from '../../resource/v2/host';
+import { parseAppError } from '../../errors/parseAppError';
+import type { AppError } from '../../errors/types';
+import { stopConnectionWithReadiness } from '../../connection/connectionReadiness';
 import {
   type ActiveSync,
   type ResourceTracker,
@@ -26,7 +30,8 @@ export interface ConnectionStatusEntry {
   connectionID: string;
   name: string;
   avatar: string;
-  isStarted: boolean;
+  readiness: NativeConnectionReadiness;
+  readinessError?: HostConnectionState['readinessError'];
   sync?: ActiveSync;
   isSyncing: boolean;
   hasErrors: boolean;
@@ -37,6 +42,10 @@ export interface ConnectionStatusEntry {
 }
 
 export interface ConnectionStatusSummary {
+  isLoading: boolean;
+  error?: AppError;
+  /** Explicitly refresh native readiness; failures are never retried automatically. */
+  refresh: () => Promise<void>;
   entries: ConnectionStatusEntry[];
   grouped: Map<string, ConnectionStatusEntry[]>;
   connectedCount: number;
@@ -58,8 +67,13 @@ export interface ConnectionStatusSummary {
  * Combines ListAllConnections query + connection/status events + watch/STATE events.
  */
 export function useConnectionStatus(): ConnectionStatusSummary {
-  // Set of "pluginID/connectionID" keys for started connections
-  const [startedKeys, setStartedKeys] = useState<Set<string>>(new Set());
+  const [readiness, setReadiness] = useState<Map<string, Pick<HostConnectionState, 'readiness' | 'readinessError'>>>(new Map());
+  const readinessRef = useRef(readiness);
+  const statusEventsRef = useRef(new Map<string, Pick<HostConnectionState, 'readiness' | 'readinessError'>>());
+  const watchEventsRef = useRef<Map<string, ResourceTracker>>(new Map());
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<AppError>();
+  const requestRef = useRef({ generation: 0 });
   // Connection metadata from ListAllConnections
   const [allConnections, setAllConnections] = useState<Record<string, Connection[]>>({});
   // Sync state per connection
@@ -100,14 +114,24 @@ export function useConnectionStatus(): ConnectionStatusSummary {
     };
   }, []);
 
-  // Hydrate full connection + watch state on mount
-  useEffect(() => {
-    GetAllConnectionStates()
-      .then((result) => {
+  // Each refresh accepts only lifecycle and watch events newer than its snapshot request.
+  const loadSnapshot = useCallback(async () => {
+    const request = ++requestRef.current.generation;
+    statusEventsRef.current.clear();
+    watchEventsRef.current.clear();
+    let snapshot: Promise<Record<string, HostConnectionState[]>>;
+    try {
+      snapshot = GetAllConnectionStates();
+    } catch (failure) {
+      // Normalize synchronous transport failures into the same completion path.
+      snapshot = Promise.reject(failure);
+    }
+    await snapshot.then((result) => {
+      if (request !== requestRef.current.generation) return;
         if (!result) return;
 
         const conns: Record<string, Connection[]> = {};
-        const keys = new Set<string>();
+        const statesByKey = new Map<string, Pick<HostConnectionState, 'readiness' | 'readinessError'>>();
         const newSyncs = new Map<string, ActiveSync>();
 
         for (const [pluginID, states] of Object.entries(result)) {
@@ -115,10 +139,10 @@ export function useConnectionStatus(): ConnectionStatusSummary {
           conns[pluginID] = states.map((s) => s.connection);
 
           for (const s of states) {
-            if (!s.started) continue;
-
-            const key = `${pluginID}/${s.connection.id}`;
-            keys.add(key);
+            const key = JSON.stringify([pluginID, s.connection.id]);
+            const state = statusEventsRef.current.get(key) ?? { readiness: s.readiness, readinessError: s.readinessError };
+            statesByKey.set(key, state);
+            if (state.readiness !== 'CONNECTED') continue;
 
             // Build a tracker from the backend's resource states
             const tracker: ResourceTracker = {
@@ -131,32 +155,58 @@ export function useConnectionStatus(): ConnectionStatusSummary {
                 tracker.states[resourceKey] = numericState as WatchState;
               }
             }
+            Object.assign(tracker.states, watchEventsRef.current.get(key)?.states);
             trackersRef.current.set(key, tracker);
             newSyncs.set(key, computeActiveSync(tracker));
           }
         }
 
         setAllConnections(conns);
-        setStartedKeys(keys);
+        for (const [key, state] of statusEventsRef.current) statesByKey.set(key, state);
+        readinessRef.current = statesByKey;
+        setReadiness(statesByKey);
         setSyncs(newSyncs);
-      })
-      .catch(() => {
-        // silently ignore - connections may not be available yet
-      });
+    }).catch((failure: unknown) => {
+      if (request === requestRef.current.generation) setError(parseAppError(failure));
+    }).finally(() => {
+      if (request === requestRef.current.generation) setIsLoading(false);
+    });
   }, []);
+
+  const refresh = useCallback(async () => {
+    setIsLoading(true);
+    setError(undefined);
+    await loadSnapshot();
+  }, [loadSnapshot]);
+
+  useEffect(() => {
+    const requests = requestRef.current;
+    loadSnapshot().catch((failure: unknown) => {
+      console.error('Connection status refresh failed:', failure);
+    });
+    return () => { ++requests.generation; };
+  }, [loadSnapshot]);
 
   // Listen for connection/status events
   useEffect(() => {
+    let active = true;
+    let metadataRequest = 0;
     const cancel = Events.On('connection/status', (ev) => {
       const event = ev.data;
-      const key = `${event.pluginID}/${event.connectionID}`;
+      const key = JSON.stringify([event.pluginID, event.connectionID]);
 
-      if (event.status === 'DISCONNECTED') {
-        setStartedKeys((prev) => {
-          const next = new Set(prev);
-          next.delete(key);
-          return next;
-        });
+      const status: NativeConnectionReadiness =
+        event.status === 'DISCONNECTED' || event.status === 'PENDING' ||
+        event.status === 'CONNECTED' || event.status === 'FAILED'
+          ? event.status : 'UNKNOWN';
+      const state = { readiness: status };
+      statusEventsRef.current.set(key, state);
+      const next = new Map(readinessRef.current);
+      next.set(key, state);
+      readinessRef.current = next;
+      setReadiness(next);
+
+      if (status !== 'CONNECTED') {
         // Clean up sync data
         setSyncs((prev) => {
           const next = new Map(prev);
@@ -164,45 +214,44 @@ export function useConnectionStatus(): ConnectionStatusSummary {
           return next;
         });
         trackersRef.current.delete(key);
-      } else {
-        // CONNECTED or other non-disconnected status
-        setStartedKeys((prev) => {
-          const next = new Set(prev);
-          next.add(key);
-          return next;
-        });
+        watchEventsRef.current.delete(key);
       }
 
-      // Re-fetch connections to get latest metadata
+      // Re-fetch connections to get latest metadata. Retire older event requests.
+      const metadata = ++metadataRequest;
+      const generation = requestRef.current.generation;
       ListAllConnections()
         .then((result) => {
-          if (!result) return;
+          if (!active || metadata !== metadataRequest || generation !== requestRef.current.generation || !result) return;
           const filtered: Record<string, Connection[]> = {};
           for (const [k, v] of Object.entries(result)) {
             if (v != null) filtered[k] = v;
           }
           setAllConnections(filtered);
         })
-        .catch(() => {});
+        .catch((failure: unknown) => {
+          if (active && metadata === metadataRequest && generation === requestRef.current.generation) {
+            console.error('Connection metadata refresh failed:', failure);
+          }
+        });
     });
 
-    return cancel;
+    return () => {
+      active = false;
+      cancel();
+    };
   }, []);
 
   // Listen for watch/STATE events
   const handleWatchEvent = useCallback((ev: Events.WailsEvent) => {
-    const event = ev.data as WatchStateEvent;
-    const key = trackerKey(event);
+    const event = ev.data as HostWatchStateEvent;
+    const key = trackerKey(event.pluginID, event);
+    // Watch activity never proves that a native client is registered.
+    if (readinessRef.current.get(key)?.readiness !== 'CONNECTED') return;
 
-    // If we get watch events for a connection, it's started
-    setStartedKeys((prev) => {
-      if (prev.has(key)) return prev;
-      const next = new Set(prev);
-      next.add(key);
-      return next;
-    });
 
-    const tracker = updateTracker(trackersRef.current, event);
+    const tracker = updateTracker(trackersRef.current, event.pluginID, event);
+    updateTracker(watchEventsRef.current, event.pluginID, event);
     const activeSync = computeActiveSync(tracker);
 
     setSyncs((prev) => {
@@ -219,11 +268,17 @@ export function useConnectionStatus(): ConnectionStatusSummary {
 
   // Actions
   const disconnect = useCallback(async (pluginID: string, connectionID: string) => {
-    await StopConnection(pluginID, connectionID);
+    await stopConnectionWithReadiness(pluginID, connectionID);
   }, []);
 
   const retryWatch = useCallback(async (pluginID: string, connectionID: string) => {
-    await StartConnectionWatch(pluginID, connectionID);
+    if (readinessRef.current.get(JSON.stringify([pluginID, connectionID]))?.readiness !== 'CONNECTED') return;
+    const route = { connection: connectionID };
+    const catalog = await Catalog(pluginID, { route });
+    const resolved = await Promise.all(catalog.types
+      .filter((type) => type.capabilities.some((capability) => capability.operation === 'update'))
+      .map((type) => ResolveTarget(pluginID, { route, type: type.type })));
+    await StartConnectionWatch(pluginID, resolved.map((target) => target.target));
   }, []);
 
   const retryPlugin = useCallback(async (pluginID: string) => {
@@ -248,13 +303,18 @@ export function useConnectionStatus(): ConnectionStatusSummary {
     }
   }, [failedPlugins]);
 
-  // Build entries from started connections
+  // Keep every discovered connection visible, including unknown and stopped clients.
   const entries: ConnectionStatusEntry[] = [];
-  for (const key of startedKeys) {
-    const [pluginID, connectionID] = key.split('/', 2);
+  const keys = new Set(readiness.keys());
+  for (const [pluginID, connections] of Object.entries(allConnections)) {
+    for (const connection of connections) keys.add(JSON.stringify([pluginID, connection.id]));
+  }
+  for (const key of keys) {
+    const [pluginID, connectionID] = JSON.parse(key) as [string, string];
     const pluginConns = allConnections[pluginID] ?? [];
     const connMeta = pluginConns.find((c) => c.id === connectionID);
-    const sync = syncs.get(key);
+    const state: Pick<HostConnectionState, 'readiness' | 'readinessError'> = readiness.get(key) ?? { readiness: 'UNKNOWN' };
+    const sync = state.readiness === 'CONNECTED' ? syncs.get(key) : undefined;
     const syncing = sync != null && !isSyncDone(sync);
     const hasErrors = sync != null && sync.errorCount > 0;
     const pluginError = failedPlugins.get(pluginID);
@@ -264,10 +324,11 @@ export function useConnectionStatus(): ConnectionStatusSummary {
       connectionID,
       name: connMeta?.name ?? connectionID,
       avatar: connMeta?.avatar ?? '',
-      isStarted: true,
+      readiness: state.readiness,
+      readinessError: state.readinessError,
       sync,
       isSyncing: syncing,
-      hasErrors: hasErrors || pluginError != null,
+      hasErrors: hasErrors || pluginError != null || state.readiness === 'FAILED' || state.readinessError != null,
       pluginFailed: pluginError != null,
       pluginError,
     });
@@ -282,15 +343,18 @@ export function useConnectionStatus(): ConnectionStatusSummary {
   }
 
   // Derived counts
-  const syncArray = Array.from(syncs.values());
+  const syncArray = entries.flatMap((entry) => entry.sync ? [entry.sync] : []);
   const syncingEntries = entries.filter((e) => e.isSyncing);
   const errorEntries = entries.filter((e) => e.hasErrors);
   const failedEntries = entries.filter((e) => e.pluginFailed);
 
   return {
+    isLoading,
+    error,
+    refresh,
     entries,
     grouped,
-    connectedCount: entries.length,
+    connectedCount: entries.filter((entry) => entry.readiness === 'CONNECTED').length,
     syncingCount: syncingEntries.length,
     errorCount: errorEntries.length,
     failedCount: failedEntries.length,

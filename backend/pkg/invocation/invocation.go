@@ -13,8 +13,9 @@ import (
 type Origin string
 
 const (
-	Host      Origin = "host"
-	TrustedUI Origin = "trusted-ui"
+	Host          Origin = "host"
+	TrustedUI     Origin = "trusted-ui"
+	ExternalAgent Origin = "external-agent"
 )
 
 type principalKey struct{}
@@ -35,7 +36,7 @@ func (p Principal) Generation() string { return p.generation }
 type Scope struct{ principal Principal }
 
 func NewScope(origin Origin) *Scope {
-	if origin != Host && origin != TrustedUI {
+	if origin != Host && origin != TrustedUI && origin != ExternalAgent {
 		panic("invalid host invocation origin")
 	}
 	return &Scope{principal: Principal{owner: uuid.NewString(), origin: origin, generation: "initial"}}
@@ -67,6 +68,7 @@ type Request struct {
 	operation string
 	target    Target
 	principal Principal
+	boundary  *Boundary
 }
 
 func (r Request) ID() string           { return r.id }
@@ -106,18 +108,60 @@ func (b *Boundary) Admit(ctx context.Context, operation string, target Target) (
 		return ctx, apperror.ForResource(err, requestID)
 	}
 	principal, ok := ctx.Value(principalKey{}).(Principal)
-	if !ok || principal.owner == "" || (principal.origin != Host && principal.origin != TrustedUI) {
+	if !ok || principal.owner == "" || (principal.origin != Host && principal.origin != TrustedUI && principal.origin != ExternalAgent) {
 		return ctx, apperror.ForResource(apperror.Forbidden("Access denied", "This operation requires a host-issued invocation."), requestID)
 	}
 	if operation == "" {
 		return ctx, apperror.ForResource(apperror.New(apperror.TypeValidation, 400, "Invalid request", "An operation is required."), requestID)
 	}
 	target = target.clone()
+	// External callers always require the host's authorizer. A missing policy
+	// dependency must not turn an authenticated credential into unrestricted access.
+	if principal.origin == ExternalAgent && (b == nil || b.authorizer == nil) {
+		return ctx, apperror.ForResource(apperror.Forbidden("Access denied", "External operations require host authorization."), requestID)
+	}
 	if b != nil && b.authorizer != nil {
 		if err := b.authorizer.Authorize(principal, operation, target.clone()); err != nil {
 			return ctx, apperror.ForResource(apperror.Forbidden("Access denied", "The operation is not permitted."), requestID)
 		}
 	}
-	request := Request{id: requestID, operation: operation, target: target, principal: principal}
+	request := Request{id: requestID, operation: operation, target: target, principal: principal, boundary: b}
+	return context.WithValue(ctx, requestKey{}, request), nil
+}
+
+// Reauthorize refines an existing reference request with its catalogue-derived
+// query scope. It never issues a new identity, changes the bound resource, or
+// treats an earlier allow decision as permission for the refined scope.
+func (b *Boundary) Reauthorize(ctx context.Context, target Target) (context.Context, error) {
+	request, ok := FromContext(ctx)
+	if !ok || request.id == "" || request.operation == "" || request.boundary != b || !request.OwnedBy(ctx) {
+		return ctx, apperror.ForResource(apperror.Forbidden("Access denied", "An existing host-issued invocation is required."), "")
+	}
+	if err := ctx.Err(); err != nil {
+		return ctx, apperror.ForResource(err, request.id)
+	}
+	current := request.target
+	if current.Provider == "" || current.ResourceType == "" || current.Object == "" ||
+		target.Provider != current.Provider || target.Connection != current.Connection ||
+		target.ResourceType != current.ResourceType || target.Object != current.Object || target.Action != current.Action {
+		return ctx, apperror.ForResource(apperror.Forbidden("Access denied", "An invocation cannot be retargeted."), request.id)
+	}
+	for key, value := range current.Scope {
+		if refined, present := target.Scope[key]; !present || refined != value {
+			return ctx, apperror.ForResource(apperror.Forbidden("Access denied", "An invocation cannot change its bound scope."), request.id)
+		}
+	}
+	for key := range target.Scope {
+		if _, present := current.Scope[key]; !present && key != "query-scope" {
+			return ctx, apperror.ForResource(apperror.Forbidden("Access denied", "Only a derived query scope may refine an invocation."), request.id)
+		}
+	}
+	target = target.clone()
+	if b != nil && b.authorizer != nil {
+		if err := b.authorizer.Authorize(request.principal, request.operation, target.clone()); err != nil {
+			return ctx, apperror.ForResource(apperror.Forbidden("Access denied", "The operation is not permitted."), request.id)
+		}
+	}
+	request.target = target
 	return context.WithValue(ctx, requestKey{}, request), nil
 }

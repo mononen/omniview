@@ -2,19 +2,21 @@ import React from 'react';
 import { ErrorBoundary } from 'react-error-boundary';
 
 // ui
-import { Button, Stack } from '@omniviewdev/base-ui';
+import { Button, Stack, Text } from '@omniviewdev/base-ui';
 import { InlineErrorFallback } from '@/components/errors/ErrorFallback';
 
 // types
-import type { DrawerComponent, DrawerContext } from '@omniviewdev/runtime';
+import { jsonToValue, valueToJSON, type Value, type DrawerComponent, type DrawerContext } from '@omniviewdev/runtime';
+import { resourceYaml, parseResourceYaml } from './resourceYaml';
 
 // icons
 import { LuCode, LuFileDiff, LuFileCode, LuLink, LuRotateCw, LuSquareChartGantt } from 'react-icons/lu';
 
 // third-party
-import { parse, stringify } from 'yaml';
+import { stringify } from 'yaml';
 import MonacoEditor, { DiffEditor } from '@monaco-editor/react';
 import { useResolvedMonacoTheme } from '@/components/displays/CodeEditor';
+import { useSchemaRegistration } from '@/providers/monaco/useSchemaRegistration';
 
 // -- Overview View ────────────────────────────────────────────────────
 
@@ -48,17 +50,28 @@ const LinkedResourceOverview: React.FC<{ ctx: DrawerContext }> = ({ ctx }) => {
 
 // -- Editor View ─────────────────────────────────────────────────────
 
+function ResourceEditorSchemas({ resource }: { resource: NonNullable<DrawerContext['resource']> }) {
+  const { error } = useSchemaRegistration({
+    pluginID: resource.pluginID,
+    connectionID: resource.route.connection,
+  });
+  return error ? <Text tone="danger">Editor schema: {String(error)}</Text> : null;
+}
+
 /**
  * Editable YAML view with submit/cancel/reset/diff — same pattern as
  * BaseEditorPage used in the Pod row-click drawer.
  */
 const LinkedResourceEditor: React.FC<{
   ctx: DrawerContext;
-  onSubmit: (ctx: DrawerContext, value: Record<string, any>) => void;
+  onSubmit: (ctx: DrawerContext, value: Record<string, any>, canonical?: Value) => void;
   onClose: () => void;
 }> = ({ ctx, onSubmit, onClose }) => {
-  const originalData = ctx.data ? stringify(ctx.data, null, 2) : '';
-  const editorPath = `file:///${ctx.resource?.key ?? 'resource'}/draft.yaml`;
+  const original = React.useMemo(() => ctx.resource?.record?.record.body ?? jsonToValue(ctx.data ?? null), [ctx]);
+  const originalData = React.useMemo(() => resourceYaml(original), [original]);
+  const editorPath = ctx.resource
+    ? `file:///resource/${encodeURIComponent(ctx.resource.pluginID)}/${encodeURIComponent(ctx.resource.route.connection)}/${encodeURIComponent(ctx.resource.reference.address.type)}/draft.yaml`
+    : 'file:///resource/draft.yaml';
 
   const [value, setValue] = React.useState<string>(originalData);
   const [changed, setChanged] = React.useState(false);
@@ -83,13 +96,14 @@ const LinkedResourceEditor: React.FC<{
   };
 
   const handleSubmit = () => {
-    const parsed = parse(value);
-    onSubmit(ctx, parsed);
+    const parsed = parseResourceYaml(value, original, originalData);
+    onSubmit(ctx, valueToJSON(parsed) as Record<string, any>, parsed);
   };
 
   return (
     <div ref={themeRootRef} style={{ display: 'contents' }}>
       <Stack direction="column" spacing={2} style={{ flex: 1 }}>
+        {ctx.resource && <ResourceEditorSchemas resource={ctx.resource} />}
         {viewDiff ? (
           <DiffEditor
             height='100%'
@@ -163,7 +177,7 @@ const LinkedResourceEditor: React.FC<{
  */
 export const createLinkedResourceDrawer = (
   resourceKey: string,
-  onSubmit: (ctx: DrawerContext, value: Record<string, any>) => void,
+  onSubmit: (ctx: DrawerContext, value: Record<string, any>, canonical?: Value) => void,
   onClose: () => void,
   SidebarComponent?: React.ComponentType<{ ctx: DrawerContext }>,
 ): DrawerComponent => ({

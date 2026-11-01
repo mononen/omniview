@@ -1,8 +1,9 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
 import { IconButton } from '@omniviewdev/base-ui';
+import { openSettings, settingsWindowTarget } from '@omniviewdev/runtime';
 
 // Project imports
+import { useActivePageNavigation } from '@/features/workspace/activePageNavigation';
 import { type HeaderIconLink as HeaderIconLinkProps } from '@/store/header/types';
 import { Icon } from '@/components/icons/Icon';
 import HintTooltip from '@/components/base/HintTooltip';
@@ -15,18 +16,28 @@ type Props = HeaderIconLinkProps;
  * A header button that navigates to another page in the application.
  */
 const HeaderIconLink: React.FC<Props> = ({ id, helpText, icon, href }) => {
-  const navigate = useNavigate();
+  const { navigate } = useActivePageNavigation();
+  const settingsTarget = settingsWindowTarget(href);
+  const mac = /mac/i.test(navigator.userAgent);
+  const label = orFallback(helpText, id);
 
   return (
-    <HintTooltip content={helpText}>
+    <HintTooltip content={settingsTarget !== null ? `${label} (${mac ? '⌘,' : 'Ctrl+,'})` : helpText}>
       <IconButton
         size='sm'
         variant='ghost'
         color='neutral'
         className={styles.NoDrag}
-        aria-label={orFallback(helpText, id)}
+        aria-label={label}
+        aria-keyshortcuts={settingsTarget !== null ? `${mac ? 'Meta' : 'Control'}+,` : undefined}
         onClick={() => {
-          navigate(href); 
+          if (settingsTarget !== null) {
+            void openSettings(settingsTarget).catch((error: unknown) => {
+              console.error('[settings] opening Settings from the title bar failed', error);
+            });
+          } else {
+            navigate(href);
+          }
         }}
       >
         <Icon name={icon} size={16} />

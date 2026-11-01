@@ -1,8 +1,9 @@
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { QueryAll } from '../../bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/metric/servicewrapper';
+import { QueryAll } from '../../metric';
 import type { QueryResponse } from '../../bindings/github.com/omniviewdev/plugin-sdk/pkg/v1/metric/models';
 import type { MetricProviderSummary } from '../../bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/metric/models';
 import { useMetricProvidersForResource } from './useMetricProviders';
+import type { Value, ResourceReference, AccessRoute } from '../../resource/v2/domain';
 
 export type UseResourceMetricsOptions = {
   /** The plugin that owns the resource (e.g., "kubernetes") */
@@ -15,8 +16,11 @@ export type UseResourceMetricsOptions = {
   resourceID: string;
   /** The resource namespace (optional) */
   resourceNamespace?: string;
-  /** The full resource data object */
-  resourceData?: Record<string, unknown>;
+  /** Canonical resource body, absent for nonresource metrics. */
+  resourceData?: Value;
+  reference?: ResourceReference;
+  route?: AccessRoute;
+  params?: Record<string, string>;
   /** Specific metric IDs to fetch (empty = all) */
   metricIDs?: string[];
   /** The shape of metric data to request */
@@ -54,7 +58,10 @@ export const useResourceMetrics = (
     resourceKey,
     resourceID,
     resourceNamespace = '',
-    resourceData = {},
+    resourceData,
+    reference,
+    route,
+    params,
     metricIDs = [],
     shape = 0, // CURRENT
     timeRange,
@@ -88,31 +95,36 @@ export const useResourceMetrics = (
       resourceKey,
       resourceID,
       resourceNamespace,
+      reference,
+      route,
+      params,
       metricIDs,
       shape,
       timeRange?.start?.getTime(),
       timeRange?.end?.getTime(),
     ],
     queryFn: async () => {
-      const raw = await QueryAll(
-        connectionID,
-        resourceKey,
-        resourceID,
-        resourceNamespace,
-        resourceData as Record<string, any>,
-        metricIDs,
+      const raw = await QueryAll(connectionID, {
+        resource_key: resourceKey,
+        resource_id: resourceID,
+        resource_namespace: resourceNamespace,
+        resource_data: resourceData,
+        reference,
+        route,
+        params,
+        metric_ids: metricIDs,
         shape,
-        (timeRange?.start ?? new Date(0)).toISOString(),
-        (timeRange?.end ?? new Date(0)).toISOString(),
-        stepNs,
-      );
+        start_time: (timeRange?.start ?? new Date(0)).toISOString(),
+        end_time: (timeRange?.end ?? new Date(0)).toISOString(),
+        step: stepNs,
+      });
       const filtered: Record<string, QueryResponse> = {};
       for (const [k, v] of Object.entries(raw)) {
         if (v != null) filtered[k] = v;
       }
       return filtered;
     },
-    enabled: enabled && !!connectionID && !!resourceKey && (resourceKey.startsWith('cluster::') || !!resourceID) && providers.length > 0,
+    enabled: enabled && !!connectionID && !!resourceKey && providers.length > 0,
     refetchInterval: refreshInterval > 0 ? refreshInterval : undefined,
     staleTime: 5_000,
     // Keep previous data visible while fetching new data (e.g. on time range change)

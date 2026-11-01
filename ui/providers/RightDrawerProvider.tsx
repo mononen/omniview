@@ -12,9 +12,14 @@ import {
   RightDrawerContext,
   type RightDrawerContextType,
   type ShowResourceSidebarParams,
+  ConnectionBoundary,
+  ConnectionBoundaryFallback,
+  withConnectionReady,
+  useSnackbar,
 } from '@omniviewdev/runtime';
 import { ResourceClient } from '@omniviewdev/runtime/api';
-import { UpdateInput, GetInput, type GetResult } from '@omniviewdev/runtime/models';
+import { jsonToValue, valueToJSON, resourceQueryKeys, createErrorHandler, type HostRecord, type Value } from '@omniviewdev/runtime';
+import { useQueryClient } from '@tanstack/react-query';
 import RightDrawer from '@/components/displays/RightDrawer';
 import { bottomDrawerChannel, getBottomDrawerHeight } from './BottomDrawer/events';
 import { createLinkedResourceDrawer } from '@/federation/LinkedResourceDrawer';
@@ -37,6 +42,7 @@ type Props = {
 const innerWidthBuffer = 47;
 
 const RightDrawerProvider: React.FC<Props> = ({ children }) => {
+  const queryClient = useQueryClient();
   // TODO - calculate these based on window width
   const minWidth = 600;
   const maxWidth = window.innerWidth - innerWidthBuffer;
@@ -47,6 +53,7 @@ const RightDrawerProvider: React.FC<Props> = ({ children }) => {
   const [context, setContext] = useState<DrawerContext | undefined>(undefined);
   const resourceRequest = useRef(0);
   const cancelResourceRead = useRef<(() => void) | null>(null);
+  const { showSnackbar } = useSnackbar();
   React.useEffect(() => () => {
     resourceRequest.current += 1;
     cancelResourceRead.current?.();
@@ -139,7 +146,7 @@ const RightDrawerProvider: React.FC<Props> = ({ children }) => {
         sidebarRef.current.style.width = initialWidth + 'px';
       }
     }
-  }, []);
+  }, [maxWidth]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     setIsDragging(true);
@@ -166,7 +173,7 @@ const RightDrawerProvider: React.FC<Props> = ({ children }) => {
     }
 
     sidebarRef.current.style.width = newWidth + 'px';
-  }, [isDragging]);
+  }, [isDragging, maxWidth]);
 
   // const handleMouseUp = useCallback(() => {
   //   setIsDragging(false);
@@ -220,7 +227,7 @@ const RightDrawerProvider: React.FC<Props> = ({ children }) => {
       event.preventDefault();
       closeDrawer();
     }
-  }, [isOpen]);
+  }, [isOpen, closeDrawer]);
 
   React.useEffect(() => {
     document.addEventListener('keydown', escFunction, false);
@@ -253,24 +260,26 @@ const RightDrawerProvider: React.FC<Props> = ({ children }) => {
     cancelResourceRead.current?.();
     cancelResourceRead.current = null;
     params.signal?.throwIfAborted();
-    const onSubmit = (_ctx: DrawerContext, value: Record<string, any>) => {
-      void ResourceClient.Update(
-        params.pluginID,
-        params.connectionID,
-        params.resourceKey,
-        UpdateInput.createFrom({
-          input: value,
-          params: {},
-          id: params.resourceID,
-          namespace: params.namespace ?? '',
-        }),
-      ).then(() => {
-        closeDrawer(); 
-      });
+    const resourceKey = params.reference.address.type;
+    const resourceID = params.reference.address.id;
+    const onSubmit = (ctx: DrawerContext, value: Record<string, any>, canonical?: Value) => {
+      if (!ctx.resource) {
+        throw new Error('Resource editor has no canonical target.');
+      }
+
+      void withConnectionReady(params.pluginID, ctx.resource.route.connection, async () => ResourceClient.Mutate(params.pluginID, {
+        route: ctx.resource!.route,
+        reference: ctx.resource!.reference,
+        operation: 'update',
+        input: canonical ?? jsonToValue(value),
+      })).then(() => {
+        void queryClient.invalidateQueries({ queryKey: resourceQueryKeys.all(params.pluginID) });
+        closeDrawer();
+      }).catch(createErrorHandler(showSnackbar, 'Failed to update resource'));
     };
 
     // Resolve drawer/sidebar via extension points — synchronous lookup
-    const epContext = createResourceExtensionRenderContext(params.pluginID, params.resourceKey);
+    const epContext = createResourceExtensionRenderContext(params.pluginID, resourceKey);
     const factory = drawerEP?.provide(epContext)?.[0];
     const sidebarComponent = sidebarEP?.provide(epContext)?.[0];
 
@@ -279,55 +288,64 @@ const RightDrawerProvider: React.FC<Props> = ({ children }) => {
     const drawer = factory
       ? factory(closeDrawer)
       : createLinkedResourceDrawer(
-        params.resourceKey,
+        resourceKey,
         onSubmit,
         closeDrawer,
         sidebarComponent,
       );
 
-    // Fetch the resource, then open the drawer with data in ctx — same as row clicks
-    const read = ResourceClient.Get(
-      params.pluginID,
-      params.connectionID,
-      params.resourceKey,
-      GetInput.createFrom({
-        id: params.resourceID,
-        namespace: params.namespace ?? '',
-        params: {},
-      }),
-    );
-    const cancel = () => {
-      void read.cancel();
-    };
-
-    cancelResourceRead.current = cancel;
-    params.signal?.addEventListener('abort', cancel, { once: true });
-    let result: GetResult | null;
-    try {
+    // Observed rows already carry host identity. Linked resources require a fresh read.
+    const result: HostRecord | null = params.record ?? await withConnectionReady(params.pluginID, params.route.connection, async () => {
       params.signal?.throwIfAborted();
-      result = await read;
-    } catch (error) {
-      if (Boolean(params.signal?.aborted) || request !== resourceRequest.current) {
-        throw new DOMException('Resource request cancelled.', 'AbortError');
+      if (request !== resourceRequest.current) {
+        throw new DOMException('Resource request superseded.', 'AbortError');
       }
 
-      throw error;
-    } finally {
-      params.signal?.removeEventListener('abort', cancel);
-      if (cancelResourceRead.current === cancel) {
-        cancelResourceRead.current = null;
+      const read = ResourceClient.Get(params.pluginID, {
+        targetId: params.targetId,
+        request: {
+          route: params.route,
+          reference: params.reference,
+          representation: params.representation,
+        },
+      });
+      const cancel = () => {
+        void read.cancel(); 
+      };
+
+      cancelResourceRead.current = cancel;
+      params.signal?.addEventListener('abort', cancel, { once: true });
+      try {
+        params.signal?.throwIfAborted();
+        return await read;
+      } catch (error) {
+        if (Boolean(params.signal?.aborted) || request !== resourceRequest.current) {
+          throw new DOMException('Resource request cancelled.', 'AbortError');
+        }
+
+        throw error;
+      } finally {
+        params.signal?.removeEventListener('abort', cancel);
+        if (cancelResourceRead.current === cancel) {
+          cancelResourceRead.current = null;
+        }
       }
-    }
+    });
 
     params.signal?.throwIfAborted();
     if (request !== resourceRequest.current) {
       throw new DOMException('Resource request superseded.', 'AbortError');
     }
 
-    const data = result?.result;
-    if (!result?.success || data == null) {
+    if (!result) {
       throw new Error('Resource is no longer available.');
     }
+
+    if (params.reference.incarnation && result.record.reference.incarnation !== params.reference.incarnation) {
+      throw new Error('Resource identity changed. Search again.');
+    }
+
+    const data = valueToJSON(result.record.body);
 
     if (params.validateData && !params.validateData(data)) {
       throw new Error('Resource identity changed. Search again.');
@@ -336,14 +354,17 @@ const RightDrawerProvider: React.FC<Props> = ({ children }) => {
     openDrawer(drawer, {
       data,
       resource: {
-        id: params.resourceID,
-        name: params.resourceName ?? params.resourceID,
-        key: params.resourceKey,
-        connectionID: params.connectionID,
+        name: params.resourceName ?? resourceID,
         pluginID: params.pluginID,
+        reference: result.record.reference,
+        route: result.route,
+        representation: result.record.representation.id,
+        key: result.key,
+        targetId: result.targetId,
+        record: result,
       },
     });
-  }, [closeDrawer, openDrawer, drawerEP, sidebarEP]);
+  }, [closeDrawer, openDrawer, drawerEP, sidebarEP, queryClient, showSnackbar]);
 
   const contextValue = useMemo(() => ({
     closeDrawer,
@@ -361,14 +382,26 @@ const RightDrawerProvider: React.FC<Props> = ({ children }) => {
         data-open={isOpen || undefined}
         style={{ width: initialWidth }}
       >
-        {content &&
-          <RightDrawer
-            {...content}
-            ctx={context}
-            open={isOpen}
-            onClose={closeDrawer}
-          />
-        }
+        {content && (
+          context?.resource?.pluginID && context.resource.route.connection ? (
+            <ConnectionBoundary
+              pluginID={context.resource.pluginID}
+              connectionID={context.resource.route.connection}
+              fallback={(state) => (
+                <ConnectionBoundaryFallback
+                  state={state}
+                  connectionName={state.connection?.name?.trim() ? state.connection.name : context.resource?.route.connection}
+                  onBack={closeDrawer}
+                  backLabel="Close"
+                />
+              )}
+            >
+              <RightDrawer {...content} ctx={context} open={isOpen} onClose={closeDrawer} />
+            </ConnectionBoundary>
+          ) : (
+            <RightDrawer {...content} ctx={context} open={isOpen} onClose={closeDrawer} />
+          )
+        )}
         <div
           ref={dragHandleRef}
           className={handleStyles.Left}

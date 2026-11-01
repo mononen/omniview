@@ -1,8 +1,9 @@
 package resource
 
 import (
+	"github.com/omniviewdev/omniview/backend/pkg/apperror"
+	sdkresource "github.com/omniviewdev/plugin-sdk/pkg/resource/v2"
 	"github.com/omniviewdev/plugin-sdk/pkg/types"
-	sdkresource "github.com/omniviewdev/plugin-sdk/pkg/v1/resource"
 )
 
 // ConnectionState is the full state snapshot for a single connection,
@@ -12,14 +13,15 @@ type ConnectionState struct {
 	// Connection metadata (name, avatar, labels, etc.)
 	Connection types.Connection `json:"connection"`
 
-	// Whether this connection is actively started/connected.
-	Started bool `json:"started"`
+	// Registered native-client state, not network health. UNKNOWN is not stopped.
+	Readiness      types.ConnectionStatusCode `json:"readiness"`
+	ReadinessError *apperror.AppError         `json:"readinessError,omitempty"`
 
 	// Per-resource watch states (resource key → WatchState enum).
 	Resources map[string]sdkresource.WatchState `json:"resources"`
 
-	// Per-resource object counts (resource key → count of cached objects).
-	ResourceCounts map[string]int `json:"resourceCounts"`
+	// Observed cache membership, not source totals.
+	ResourceCounts map[string]sdkresource.Count `json:"resourceCounts"`
 
 	// Aggregate counts computed server-side.
 	TotalResources int `json:"totalResources"`

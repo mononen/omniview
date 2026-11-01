@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,9 +30,11 @@ import (
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/registry"
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/resource"
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/settings"
+	"github.com/omniviewdev/omniview/backend/pkg/plugin/tools"
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/types"
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/ui"
 	"github.com/omniviewdev/omniview/backend/pkg/plugin/utils"
+	settingsservice "github.com/omniviewdev/omniview/backend/pkg/settings"
 	"github.com/omniviewdev/omniview/backend/window"
 	"github.com/omniviewdev/omniview/internal/appstate"
 	"github.com/omniviewdev/omniview/internal/bootstrap"
@@ -40,11 +43,16 @@ import (
 	"github.com/omniviewdev/omniview/internal/devsession"
 	"github.com/omniviewdev/omniview/internal/hostruntime"
 	"github.com/omniviewdev/omniview/internal/instance"
+	"github.com/omniviewdev/omniview/internal/mcprelay"
+	"github.com/omniviewdev/omniview/internal/profiling"
 	coresettings "github.com/omniviewdev/omniview/internal/settings"
 	settingsstore "github.com/omniviewdev/omniview/internal/settings/store"
+	"github.com/omniviewdev/omniview/internal/shellenv"
 	"github.com/omniviewdev/omniview/internal/telemetry"
 	"github.com/omniviewdev/omniview/internal/version"
 	logging "github.com/omniviewdev/plugin-sdk/log"
+	sdkprofiling "github.com/omniviewdev/plugin-sdk/pkg/profiling"
+	resourcev2 "github.com/omniviewdev/plugin-sdk/pkg/resource/v2"
 	pkgsettings "github.com/omniviewdev/plugin-sdk/settings"
 )
 
@@ -79,12 +87,23 @@ func newUICapabilityControllers(
 	resourceUIRealm *invocation.Scope,
 ) (exec.Controller, networker.Controller, pluginlogs.Controller, pluginmetric.Controller) {
 	uiResourceService := &resource.ServiceWrapper{Ctrl: resourceController, Realm: resourceUIRealm}
-	return exec.NewController(log, settingsProvider, uiResourceService),
-		networker.NewController(log, settingsProvider, uiResourceService),
-		pluginlogs.NewController(log, settingsProvider, uiResourceService),
-		pluginmetric.NewController(log, settingsProvider, uiResourceService)
+	admitReference := func(ctx context.Context, operation, pluginID string, route resourcev2.AccessRoute, ref resourcev2.ResourceReference) (context.Context, error) {
+		return resourceController.AdmitReference(resourceUIRealm.Context(ctx), operation, pluginID, route, ref)
+	}
+	execController := exec.NewController(log, settingsProvider, uiResourceService)
+	networkerController := networker.NewController(log, settingsProvider, uiResourceService)
+	logsController := pluginlogs.NewController(log, settingsProvider, uiResourceService)
+	metricController := pluginmetric.NewController(log, settingsProvider, uiResourceService)
+	execController.SetReferenceAdmitter(admitReference)
+	networkerController.SetReferenceAdmitter(admitReference)
+	logsController.SetReferenceAdmitter(resourceController.AdmitReference)
+	logsController.SetUIReferenceAdmitter(admitReference)
+	metricController.SetReferenceAdmitter(admitReference)
+	return execController, networkerController, logsController, metricController
 }
 
+// main resolves instance identity, initializes services and runs the host.
+//
 //nolint:funlen // main function is expected to be long
 func main() {
 	if handled, exit := hostruntime.HandleNativeProfileRemoval(os.Args[1:]); handled {
@@ -96,6 +115,11 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: invalid runtime profile: %v\n", err)
 		os.Exit(1)
+	}
+	// Finder does not inherit a terminal's login PATH. Resolve it before any
+	// plugin or executable starts, while preserving host isolation authority.
+	if err := shellenv.Restore(context.Background()); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: login environment unavailable; keeping inherited environment")
 	}
 	var pluginAssets, defaultAssets http.Handler
 	options := application.Options{
@@ -222,15 +246,25 @@ func main() {
 		}
 	}
 
-	// Seed telemetry config from persisted bbolt settings so that telemetry
-	// starts with the user's saved preferences rather than defaults.
-	telemetryCfg := telemetry.DefaultConfig(version.IsDevelopment())
-	if settingsStore != nil {
-		if telVals, loadErr := settingsStore.LoadCategory("telemetry"); loadErr == nil &&
-			len(telVals) > 0 {
-			telemetryCfg = telemetryCfg.WithSettings(telVals)
-		}
+	coreDefinitions := coresettings.Definitions(version.IsDevelopment())
+	coreSettings, err := settingsservice.Initialize(settingsservice.Options{
+		Store:      settingsStore,
+		Categories: coreDefinitions,
+		Migrations: map[string]settingsservice.Migration{
+			coresettings.Appearance.ID: coresettings.MigrateAppearanceValues,
+			coresettings.Terminal.ID:   coresettings.MigrateTerminalValues,
+		},
+		Logger: nil,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fatal: cannot initialize core settings: %v\n", err)
+		os.Exit(1)
 	}
+	for _, diagnostic := range coreSettings.Diagnostics() {
+		fmt.Fprintf(os.Stderr, "settings: %s (%s.%s)\n", diagnostic.Message, diagnostic.CategoryID, diagnostic.SettingID)
+	}
+	settingsProvider := coreSettings.Provider()
+	telemetryCfg := telemetry.DefaultConfig(version.IsDevelopment()).WithSettings(coreSettings.CategoryValues("telemetry"))
 
 	// Bootstrap telemetry (tracing, metrics, log shipping, profiling).
 	telemetrySvc := telemetry.New(
@@ -265,11 +299,21 @@ func main() {
 
 	diagnosticsClient := diagnostics.NewDiagnosticsClient(version.IsDevelopment(), logDir)
 
-	settingsProvider := pkgsettings.NewProvider(pkgsettings.ProviderOpts{
-		Logger:         zapLogger.Sugar(),
-		PluginID:       "",
-		PluginSettings: nil,
-	})
+	profilingConfig, profilingSource, err := profiling.ResolveConfig(
+		settingsProvider, coreSettings.RejectedSettingIDs(), os.Getenv("OMNIVIEW_PPROF_PORT"),
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fatal: invalid profiling environment: %v\n", err)
+		os.Exit(1)
+	}
+	hostProfiling := sdkprofiling.New(profilingConfig, profilingSource)
+	if startErr := hostProfiling.Start(); startErr != nil {
+		log.Warnw(context.Background(), "host profiling unavailable", "error", startErr)
+	}
+	if status := hostProfiling.GetStatus(); status.Running {
+		log.Infow(context.Background(), "host pprof listening", "url", status.URL, "source", status.Source)
+	}
+	defer hostProfiling.Close()
 
 	// Create our plugin system managers
 	uiManager := ui.NewComponentManager(log)
@@ -281,16 +325,20 @@ func main() {
 	utilsClient := utils.NewClient()
 
 	// Setup the plugin systems
-	resourceBoundary := invocation.NewBoundary(nil)
+	mcpAuthority := mcprelay.NewAuthority()
+	resourceBoundary := invocation.NewBoundary(mcpAuthority)
 	resourceUIRealm := invocation.NewScope(invocation.TrustedUI)
 	resourceController := resource.NewController(log, settingsProvider, stateDir.PluginStore, resourceBoundary)
-	graphService := resource.NewGraphService(resourceController.Graph(), resourceUIRealm, resourceBoundary)
+	graphService := resource.NewGraphService(resourceController.Graph(), resourceUIRealm, resourceBoundary, resourceController.ValidateReference)
 
-	settingsController := settings.NewController(log, settingsProvider, settingsStore)
+	settingsController := settings.NewController(log, settingsStore)
+	coreSettings.AttachPlugins(settingsController)
 
 	execController, networkerController, logsController, metricController := newUICapabilityControllers(
 		log, settingsProvider, resourceController, resourceUIRealm,
 	)
+	resourceController.SetConnectionChangeHook(metricController.BeginConnectionChange)
+	toolsController := tools.NewController(log, resourceBoundary)
 
 	dataController := data.NewController(log, stateDir.PluginData)
 
@@ -320,6 +368,7 @@ func main() {
 		networkerController,
 		logsController,
 		metricController,
+		toolsController,
 		managers,
 		settingsProvider,
 		pluginRegistryClient,
@@ -420,8 +469,7 @@ func main() {
 	// Create the bootstrap service that wraps startup/shutdown logic
 	bootstrapSvc := &bootstrap.Service{
 		Log:                  log,
-		SettingsProvider:     settingsProvider,
-		SettingsStore:        settingsStore,
+		Settings:             coreSettings,
 		TelemetrySvc:         telemetrySvc,
 		PluginManager:        pluginManager,
 		PluginRegistryClient: pluginRegistryClient,
@@ -435,6 +483,29 @@ func main() {
 	// registration (NewService requires a concrete pointer type).
 	pluginManagerSvc := &plugin.ServiceWrapper{Mgr: pluginManager}
 
+	// A nil *Store must stay a nil interface: the relay then runs in memory.
+	var mcpRelayStore mcprelay.ConfigStore
+	if settingsStore != nil {
+		mcpRelayStore = settingsStore
+	}
+	var windowService *window.Service
+	mcpRelay := mcprelay.New(mcprelay.Options{
+		Log:         log,
+		Store:       mcpRelayStore,
+		Tools:       toolsController,
+		Connections: resourceController,
+		Version:     version.Version,
+		Authority:   mcpAuthority,
+		Boundary:    resourceBoundary,
+		Logs:        logsController,
+		ShowConfirmation: func() error {
+			if windowService == nil {
+				return errors.New("Confirmation window is unavailable.")
+			}
+			return windowService.Focus(window.MainWindowName)
+		},
+	})
+
 	// Register controllers before bootstrap: bootstrap loads plugins and their
 	// controllers need initialized contexts. Registration remains before Run.
 	// Service registration order matters: Wails calls ServiceStartup in order.
@@ -445,7 +516,6 @@ func main() {
 		// 1. Controllers — need ctx before plugin loading
 		application.NewService(&resource.ServiceWrapper{Ctrl: resourceController, Realm: resourceUIRealm}),
 		application.NewService(graphService),
-		application.NewService(&settings.ServiceWrapper{Ctrl: settingsController}),
 		application.NewService(&exec.ServiceWrapper{Ctrl: execController}),
 		application.NewService(&networker.ServiceWrapper{Ctrl: networkerController}),
 		application.NewService(&pluginlogs.ServiceWrapper{Ctrl: logsController}),
@@ -454,24 +524,16 @@ func main() {
 		application.NewService(ui.NewServiceWrapper(uiManager)),
 		application.NewService(utilsClient),
 		application.NewService(&devserver.ServiceWrapper{Mgr: devServerManager}),
-		// 2. Bootstrap — initializes settings, telemetry, loads plugins
+		// 2. Bootstrap — attaches live settings effects and loads plugins.
 		application.NewService(bootstrapSvc),
 		// 3. Frontend-facing services (no startup order dependency)
 		application.NewService(appService),
 		application.NewService(diagnosticsClient),
 		application.NewService(telemetry.NewTelemetryBinding(telemetrySvc)),
-		application.NewService(&coresettings.ServiceWrapper{
-			Provider: settingsProvider,
-			CategoryMeta: map[string]pkgsettings.Category{
-				coresettings.General.ID:    coresettings.General,
-				coresettings.Appearance.ID: coresettings.Appearance,
-				coresettings.Terminal.ID:   coresettings.Terminal,
-				coresettings.Editor.ID:     coresettings.Editor,
-				coresettings.Developer.ID:  coresettings.Developer,
-				coresettings.Telemetry.ID:  coresettings.Telemetry,
-			},
-		}),
+		application.NewService(&profiling.ServiceWrapper{Service: hostProfiling}),
+		application.NewService(&settingsservice.Binding{Service: coreSettings}),
 		application.NewService(pluginManagerSvc),
+		application.NewService(&mcprelay.ServiceWrapper{Relay: mcpRelay}),
 	}
 
 	if pluginLogManager != nil {
@@ -487,7 +549,7 @@ func main() {
 	runtimeReady, err := controlhost.Register(
 		app, profile,
 		appService.GetInstanceInfo, appService.updateInstanceInfo,
-		pluginManager, devServerManager, settingsProvider, settingsController,
+		pluginManager, devServerManager, coreSettings,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: cannot register development control: %v\n", err)
@@ -499,14 +561,10 @@ func main() {
 		windowTitle = appName + " — DEV · " + profile.Descriptor.DisplayName
 	}
 
-	// Create the main window
-	mainWindow := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:      "main",
-		Title:     windowTitle,
-		Width:     DefaultWebviewWidth,
-		Height:    DefaultWebviewHeight,
-		MinWidth:  MinWebviewWidth,
-		MinHeight: MinWebviewHeight,
+	// Every window shares the main window's title and appearance; the window
+	// service overrides name, URL, size and position for secondary windows.
+	windowTemplate := application.WebviewWindowOptions{
+		Title: windowTitle,
 		BackgroundColour: application.NewRGBA(
 			backgroundRed,
 			backgroundGreen,
@@ -518,20 +576,39 @@ func main() {
 			TitleBar: application.MacTitleBarHidden,
 			Backdrop: application.MacBackdropTranslucent,
 		},
-	})
+	}
+
+	// Create the main window
+	mainWindowOptions := windowTemplate
+	mainWindowOptions.Name = window.MainWindowName
+	mainWindowOptions.Width = DefaultWebviewWidth
+	mainWindowOptions.Height = DefaultWebviewHeight
+	mainWindowOptions.MinWidth = MinWebviewWidth
+	mainWindowOptions.MinHeight = MinWebviewHeight
+	mainWindow := app.Window.NewWithOptions(mainWindowOptions)
 	if runtimeReady != nil {
 		mainWindow.OnWindowEvent(events.Common.WindowRuntimeReady, func(_ *application.WindowEvent) {
 			runtimeReady()
 		})
 	}
 
-	// Set up menus, keybindings, and context menus
-	menus.SetupAppMenu(app, mainWindow)
+	// The window service keeps main hide-on-close, restores the saved
+	// secondary windows and coordinates cross-window tab drags.
+	windowService = window.NewService(app, mainWindow, window.ServiceOptions{
+		WindowTemplate: windowTemplate,
+		SessionPath:    stateDir.RootDir().ResolvePath(window.SessionFileName),
+		Log:            log.Named("window"),
+	})
+	app.RegisterService(application.NewService(windowService))
+
+	// Install menus only after their backend window service is ready.
+	menus.SetupAppMenu(app, mainWindow, func() {
+		if _, err := windowService.OpenSettings(""); err != nil {
+			log.Errorw(context.Background(), "failed to open settings", "error", err)
+		}
+	})
 	menus.SetupKeyBindings(app)
 	menus.SetupContextMenus(app)
-
-	// Set up window manager (registers hide-on-close hook, etc.)
-	_ = window.NewManager(app, mainWindow)
 
 	// Run the application
 	if runErr := app.Run(); runErr != nil {

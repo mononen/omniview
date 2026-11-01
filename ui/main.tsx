@@ -14,9 +14,25 @@ initTelemetry(bridgeSink);
 
 import App from './App';
 import { createRoot } from 'react-dom/client';
+import { loadInitialWindowState, resolveCurrentWindow } from './features/windows';
 
 const container = document.getElementById('root')!;
 const root = createRoot(container);
 
-root.render(<App />);
+// Identity must resolve before shell selection. State restoration can fall back
+// to empty tabs; a failed identity must never mount a second workspace shell.
+resolveCurrentWindow()
+  .then(async () => {
+    try {
+      await loadInitialWindowState();
+    } catch (error: unknown) {
+      console.error('[windows] failed to restore window state', error);
+    }
+
+    root.render(<App />);
+  })
+  .catch((error: unknown) => {
+    console.error('[windows] failed to identify this window', error);
+    root.render(<p role='alert'>Could not identify this application window. Reload to try again.</p>);
+  });
 

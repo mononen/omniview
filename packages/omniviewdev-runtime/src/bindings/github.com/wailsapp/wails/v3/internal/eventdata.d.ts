@@ -19,13 +19,19 @@ import type * as pluginlog$0 from "../../../../omniviewdev/omniview/backend/pkg/
 import type * as resource$0 from "../../../../omniviewdev/omniview/backend/pkg/plugin/resource/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import type * as settings$0 from "../../../../omniviewdev/omniview/backend/pkg/settings/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import type * as window$0 from "../../../../omniviewdev/omniview/backend/window/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import type * as mcprelay$0 from "../../../../omniviewdev/omniview/internal/mcprelay/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import type * as config$0 from "../../../../omniviewdev/plugin-sdk/pkg/config/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import type * as networker$0 from "../../../../omniviewdev/plugin-sdk/pkg/v1/networker/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import type * as resource$1 from "../../../../omniviewdev/plugin-sdk/pkg/v1/resource/models.js";
 
 declare module "@wailsio/runtime" {
     namespace Events {
@@ -33,6 +39,11 @@ declare module "@wailsio/runtime" {
             "connection/status": resource$0.ConnectionStatusPayload;
             "core/networker/portforward/closed": networker$0.PortForwardSession | null;
             "core/networker/portforward/created": networker$0.PortForwardSession | null;
+            "mcp/config_changed": string;
+            "mcp/confirmation/requested": mcprelay$0.PendingConfirmation;
+            "mcp/confirmation/resolved": mcprelay$0.ConfirmationResolved;
+            "mcp/status": mcprelay$0.Status;
+            "mcp/tools_changed": string;
             "menu/context/drawer-tab/close": string;
             "menu/context/drawer-tab/close-others": string;
             "menu/view/bottomdrawer/fullscreen": void;
@@ -63,8 +74,17 @@ declare module "@wailsio/runtime" {
             "plugin/update_complete": plugin$0.UpdatePayload;
             "plugin/update_error": plugin$0.UpdateErrorPayload;
             "plugin/update_started": plugin$0.UpdatePayload;
-            "settings/changed": string;
-            "watch/STATE": resource$1.WatchStateEvent;
+            "resource/connection/metadata": resource$0.HostConnectionMetadata;
+            "settings/changed": settings$0.Scope;
+            "settings/state": window$0.SettingsState;
+            "watch/STATE": resource$0.HostWatchStateEvent;
+            "windows/changed": window$0.WindowsChangedEvent;
+            "windows/closed": window$0.WindowClosedEvent;
+            "windows/drag/begin": window$0.DragBeginEvent;
+            "windows/drag/drop": window$0.DragPointerEvent;
+            "windows/drag/end": window$0.DragEndEvent;
+            "windows/drag/hover": window$0.DragPointerEvent;
+            "windows/drag/leave": window$0.DragLeaveEvent;
         }
     }
 }

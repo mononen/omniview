@@ -3,18 +3,16 @@ import { act, cleanup, createEvent, fireEvent, render, screen, waitFor } from '@
 import { ExtensionPointRegistry } from '@omniviewdev/runtime';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ensureBuiltinExtensionPointsRegistered } from '../extensions/registerBuiltinExtensionPoints';
+import { registerCoreSearchCatalogue } from './catalogue';
 import { createGlobalSearchController, type GlobalSearchController } from './controller';
 import { GlobalCommandSearch } from './GlobalCommandSearch';
 import type { SearchScopeV1, SearchSnapshot } from './types';
+import { searchResource, searchType } from './searchFixtures';
 
 const connection: SearchScopeV1 = { kind: 'connection', pluginId: 'probe', connectionId: 'prod-id', label: 'prod' };
-const resourceType: SearchScopeV1 = {
-  kind: 'resource-type', pluginId: 'probe', connectionId: 'prod-id', resourceKey: 'core::v1::Pod', label: 'Pods',
-};
-const resource: SearchScopeV1 = {
-  kind: 'resource', pluginId: 'probe', connectionId: 'prod-id', resourceKey: 'core::v1::Pod',
-  resourceId: 'api', namespace: 'payments', uid: 'api-uid', label: 'api',
-};
+const resourceType = { ...searchType('k8s:/pods'), target: { ...searchType('k8s:/pods').target, route: { connection: 'prod-id' } } };
+const baseResource = searchResource('k8s:/pods', 'api', [{ dimension: 'namespace', value: 'payments' }]);
+const resource = { ...baseResource, route: { connection: 'prod-id' }, reference: { ...baseResource.reference, incarnation: 'api-uid' } };
 const controllers: GlobalSearchController[] = [];
 
 afterEach(() => {
@@ -41,6 +39,7 @@ async function setup() {
     value: { schemaVersion: 1, kind: 'setting', target: { section: 'extensions' } },
   });
   const navigate = vi.fn();
+  const openNew = vi.fn();
   const controller = createGlobalSearchController({
     registry,
     isPluginReady: () => true,
@@ -48,6 +47,7 @@ async function setup() {
     listResourcePlugins: async () => [],
     loadConnections: async () => [],
     navigate,
+    openNew,
   });
   controllers.push(controller);
   const close = vi.fn(() => {
@@ -71,7 +71,7 @@ async function setup() {
     fireEvent.click(opener); 
   });
   const input = screen.getByRole<HTMLInputElement>('combobox', { name: 'Search Omniview' });
-  return { controller, navigate, close, opener, input, store };
+  return { controller, navigate, openNew, close, opener, input, store, registry };
 }
 
 function type(input: HTMLInputElement, value: string) {
@@ -236,6 +236,30 @@ describe('GlobalCommandSearch scoped interaction', () => {
     expect(opener.closest('[inert]')).toBeNull();
   });
 
+  it.each([
+    [{}, 'tab'],
+    [{ ctrlKey: true }, 'background'],
+    [{ shiftKey: true }, 'window'],
+  ] as const)('opens a "New <plugin> tab" row with Enter modifiers %o in a %s', async (modifiers, disposition) => {
+    const { controller, input, navigate, openNew, registry } = await setup();
+    act(() => {
+      registerCoreSearchCatalogue(registry, { settings: {}, plugins: [], newTabPlugins: [{ id: 'probe', name: 'Probe' }] });
+    });
+    type(input, 'new probe');
+    await waitFor(() => {
+      expect(controller.getSnapshot().rows[0]?.label).toBe('New Probe tab');
+    });
+    act(() => {
+      controller.setSelectedKey(controller.getSnapshot().rows[0].key);
+    });
+    expect(screen.getByText('Background tab')).toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: 'Enter', ...modifiers });
+
+    expect(openNew).toHaveBeenCalledWith('/_plugin/probe/', disposition);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
   it('holds selected object identity across refreshed controller results', async () => {
     const { controller, input, navigate } = await setup();
     const pods = controller.getSnapshot().rows.find((row) => row.label === 'Pods')!;
@@ -340,8 +364,7 @@ it.each(['Enter', 'pointer'] as const)('keeps dialog and input after a registere
   expect(input).toHaveFocus();
   expect(input).toHaveValue('Choose log container');
   expect(controller.getSnapshot().scopes).toEqual([
-    expect.objectContaining({ kind: 'connection', pluginId: resource.pluginId, connectionId: resource.connectionId }),
-    expect.objectContaining({ kind: 'resource-type', pluginId: resource.pluginId, connectionId: resource.connectionId, resourceKey: resource.resourceKey }),
+    expect.objectContaining({ kind: 'connection', pluginId: resource.pluginId, connectionId: resource.route.connection }),
     resource,
   ]);
   expect(close).not.toHaveBeenCalled();

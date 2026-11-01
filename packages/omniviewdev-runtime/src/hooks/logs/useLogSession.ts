@@ -1,10 +1,10 @@
 import { useMutation } from '@tanstack/react-query';
 import { useSnackbar } from '../snackbar/useSnackbar';
 import { createErrorHandler } from '../../errors/parseAppError';
-import { CreateSession, CloseSession } from '../../bindings/github.com/omniviewdev/omniview/backend/pkg/plugin/logs/servicewrapper';
-import { CreateSessionOptions, LogSessionOptions } from '../../bindings/github.com/omniviewdev/plugin-sdk/pkg/v1/logs/models';
+import { CreateSession, CloseSession, type LogSessionRequest } from '../../logs';
 import { useBottomDrawer } from '../drawer';
 import { useResolvedPluginId } from '../useResolvedPluginId';
+import type { Value, ResourceReference, AccessRoute } from '../../resource/v2/domain';
 
 type UseLogSessionOptions = {
   pluginID?: string;
@@ -14,7 +14,9 @@ type CreateLogSessionArgs = {
   connectionID: string;
   resourceKey: string;
   resourceID: string;
-  resourceData: Record<string, any>;
+  resourceData: Value;
+  reference?: ResourceReference;
+  route?: AccessRoute;
   icon?: string | React.ReactNode;
   label?: string;
   target?: string;
@@ -34,6 +36,8 @@ export const useLogs = ({ pluginID: explicitPluginID }: UseLogSessionOptions) =>
       resourceKey,
       resourceID,
       resourceData,
+      reference,
+      route,
       icon,
       label,
       target,
@@ -41,11 +45,13 @@ export const useLogs = ({ pluginID: explicitPluginID }: UseLogSessionOptions) =>
       tailLines = 1000,
       params,
     }: CreateLogSessionArgs) => {
-      const opts = CreateSessionOptions.createFrom({
+      const opts: LogSessionRequest = {
         resource_key: resourceKey,
         resource_id: resourceID,
         resource_data: resourceData,
-        options: LogSessionOptions.createFrom({
+        reference,
+        route,
+        options: {
           target: target ?? '',
           follow,
           include_previous: false,
@@ -55,8 +61,8 @@ export const useLogs = ({ pluginID: explicitPluginID }: UseLogSessionOptions) =>
           limit_bytes: 0,
           include_source_events: true,
           params: params ?? {},
-        }),
-      });
+        },
+      };
 
       const session = await CreateSession(pluginID, connectionID, opts);
       if (!session) throw new Error('Failed to create log session: null response');
